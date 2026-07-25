@@ -21,6 +21,12 @@ def reset_keys(monkeypatch):
     monkeypatch.setattr(app_module, "BACKEND_API_KEY", "")
     monkeypatch.setattr(app_module, "GEMINI_API_KEY", "")
     monkeypatch.setattr(app_module, "OPENAI_API_KEY", "")
+    # Firebase Admin defaults to "not configured" so existing tests exercise
+    # the AI-fallback/auth logic without also needing a Firebase ID token —
+    # matches the real graceful-degradation behavior on a dev machine
+    # without serviceAccountKey.json. Tests for the token gate itself
+    # override this back to a truthy sentinel.
+    monkeypatch.setattr(app_module, "_firestore_admin", None)
 
 
 class TestApiKeyGate:
@@ -163,6 +169,75 @@ class TestAssistantFallback:
         assert "GEMINI_API_KEY" in r.get_json()["error"]
 
 
+class TestFirebaseAuthGate:
+    """Covers _require_firebase_user()/_verified_uid_or_none() — the layer
+    added on top of the static BACKEND_API_KEY for /api/summarize,
+    /api/assistant and /api/admin/seed, since the API key ships inside the
+    app and isn't a real secret against a determined actor."""
+
+    def test_skipped_entirely_when_firebase_admin_not_configured(self, client, monkeypatch):
+        # _firestore_admin is None by default via the reset_keys fixture —
+        # matches a dev machine without serviceAccountKey.json.
+        monkeypatch.setattr(
+            app_module, "_try_gemini_summarize",
+            lambda text: {"summary": "ok", "sentiment": "Neutral", "triangle_hint": "h"},
+        )
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        r = client.post("/api/summarize", json={"text": "Some article."})
+        assert r.status_code == 200
+
+    def test_summarize_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        r = client.post("/api/summarize", json={"text": "Some article."})
+        assert r.status_code == 401
+
+    def test_assistant_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.post("/api/assistant", json={"prompt": "hello"})
+        assert r.status_code == 401
+
+    def test_rejects_malformed_authorization_header(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.post(
+            "/api/assistant", json={"prompt": "hello"},
+            headers={"Authorization": "NotBearer sometoken"},
+        )
+        assert r.status_code == 401
+
+    def test_rejects_invalid_token(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+
+        def broken_verify(token):
+            raise ValueError("invalid token")
+
+        monkeypatch.setattr(app_module.admin_auth, "verify_id_token", broken_verify)
+        r = client.post(
+            "/api/assistant", json={"prompt": "hello"},
+            headers={"Authorization": "Bearer bad-token"},
+        )
+        assert r.status_code == 401
+
+    def test_accepts_a_valid_token(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+
+        def fake_verify(token):
+            assert token == "good-token"
+            return {"uid": "user-123"}
+
+        monkeypatch.setattr(app_module.admin_auth, "verify_id_token", fake_verify)
+        monkeypatch.setattr(app_module, "_try_ollama", lambda p: (_ for _ in ()).throw(ConnectionError()))
+        monkeypatch.setattr(app_module, "_try_gemini", lambda p: "hi there")
+
+        r = client.post(
+            "/api/assistant", json={"prompt": "hello"},
+            headers={"Authorization": "Bearer good-token"},
+        )
+        assert r.status_code == 200
+        assert r.get_json()["response"] == "hi there"
+
+
 class TestAdminSeed:
     def test_rejects_when_backend_key_not_configured_at_all(self, client):
         r = client.post("/api/admin/seed", json={"collections": {"academy_scenarios": {}}})
@@ -215,6 +290,7 @@ class TestAdminSeed:
                 return FakeCollectionRef(name)
 
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdmin())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
 
         payload = {
             "collections": {
@@ -232,8 +308,18 @@ class TestAdminSeed:
     def test_rejects_empty_collections_payload(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
         r = client.post(
             "/api/admin/seed", json={"collections": {}},
             headers={"X-API-Key": "secret123"},
         )
         assert r.status_code == 400
+
+    def test_rejects_when_no_valid_firebase_token_even_with_correct_api_key(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.post(
+            "/api/admin/seed", json={"collections": {"academy_scenarios": {"a": {}}}},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 401

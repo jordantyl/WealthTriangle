@@ -12,7 +12,19 @@ import yfinance as yf
 from algorithms import run_monte_carlo, calculate_historical_backtest, run_time_machine
 
 app = Flask(__name__)
-CORS(app)
+
+# =====================================================================
+# 🔐 CORS — restricted to an explicit allowlist instead of the default
+# wide-open "*". This only matters for browser-based callers (a website's
+# JS fetch()); native mobile HTTP requests are never subject to CORS at
+# all, so this can't break the Flutter app. Set ALLOWED_ORIGINS to a
+# comma-separated list (e.g. "https://yourapp.web.app") once a web build
+# is actually hosted; empty/unset means no browser origin is allowed.
+# =====================================================================
+_allowed_origins = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+CORS(app, origins=_allowed_origins)
 
 # =====================================================================
 # 🛡️ RATE LIMITING — protects free API quotas (Gemini/OpenAI) and this
@@ -45,7 +57,7 @@ limiter = Limiter(
 _firestore_admin = None
 try:
     import firebase_admin
-    from firebase_admin import credentials, firestore as admin_firestore
+    from firebase_admin import credentials, firestore as admin_firestore, auth as admin_auth
     _key_path = os.path.join(os.path.dirname(__file__), "serviceAccountKey.json")
     _key_json_env = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
     if os.path.exists(_key_path):
@@ -59,6 +71,41 @@ try:
         _firestore_admin = admin_firestore.client()
 except Exception as e:
     print(f"Firebase Admin not initialized (admin seed endpoint will be disabled): {e}")
+
+
+# =====================================================================
+# 🔐 FIREBASE ID TOKEN VERIFICATION — a stronger check than the static
+# X-API-Key alone. BACKEND_API_KEY ships inside the app (mobile_app's
+# lib/.env is a bundled Flutter asset, extractable from the APK — and if
+# the web build ever gets hosted, fetchable at a plain URL), so it isn't
+# a real secret against a determined actor, only a filter against casual
+# scanners. Requiring a live Firebase ID token on top of it means an
+# attacker also needs a real, revocable, rate-limitable user account —
+# not just a string copied out of the app. Only enforced once Firebase
+# Admin is actually configured (same precondition /api/admin/seed already
+# has); on a machine without serviceAccountKey.json (local dev), this is
+# skipped so the app keeps working with just the X-API-Key check.
+# =====================================================================
+def _verified_uid_or_none():
+    if _firestore_admin is None:
+        return None
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    try:
+        decoded = admin_auth.verify_id_token(header[len("Bearer "):])
+        return decoded.get("uid")
+    except Exception:
+        return None
+
+
+def _require_firebase_user():
+    """Returns None if OK to proceed, else a (response, status) error tuple."""
+    if _firestore_admin is None:
+        return None  # Firebase Admin not configured — skip (see note above)
+    if _verified_uid_or_none() is None:
+        return jsonify({"error": "Unauthorized: valid Firebase sign-in required"}), 401
+    return None
 
 # =====================================================================
 # 🔐 SECRET KEYS LIVE ON THE SERVER ONLY.
@@ -83,6 +130,13 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 # OpenAI/RapidAPI quota for free.
 # =====================================================================
 BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY", "")
+if not BACKEND_API_KEY:
+    print(
+        "⚠️  WARNING: BACKEND_API_KEY is not set — every endpoint on this "
+        "server is reachable by anyone who finds its address. Set "
+        "BACKEND_API_KEY (and the matching value in mobile_app/lib/.env) "
+        "before hosting this publicly."
+    )
 
 
 @app.before_request
@@ -338,6 +392,10 @@ def _try_openai_summarize(article_text):
 @app.route('/api/summarize', methods=['POST'])
 @limiter.limit("10 per minute")
 def summarize_proxy():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
+
     payload = request.get_json(silent=True) or {}
     article_text = (payload.get('text') or '')[:1500]
 
@@ -421,6 +479,10 @@ def _try_gemini(prompt):
 @app.route('/api/assistant', methods=['POST'])
 @limiter.limit("10 per minute")
 def assistant_proxy():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
+
     payload = request.get_json(silent=True) or {}
     prompt = payload.get('prompt', '')
     if not prompt:
@@ -467,7 +529,7 @@ def search_ticker():
     headers = {'User-Agent': 'Mozilla/5.0'}
 
     try:
-        r = requests.get(url, headers=headers)
+        r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
         quotes = data.get('quotes', [])
         results = []
@@ -635,6 +697,9 @@ def admin_seed():
             "error": "Firebase Admin isn't set up — missing "
                      "backend/serviceAccountKey.json."
         }), 503
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
 
     payload = request.get_json(silent=True) or {}
     collections = payload.get('collections', {})

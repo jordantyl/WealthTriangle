@@ -19,10 +19,11 @@ class MarketIntelligenceService {
 
   Future<Map<String, dynamic>> requestAISummary(String articleText) async {
     try {
+      final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
       final response = await http
           .post(
             Uri.parse('$_baseUrl/api/summarize'),
-            headers: backendHeaders({'Content-Type': 'application/json'}),
+            headers: headers,
             body: json.encode({'text': articleText}),
           )
           .timeout(const Duration(seconds: 20));

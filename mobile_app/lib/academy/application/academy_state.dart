@@ -544,9 +544,10 @@ class AcademyState extends ChangeNotifier {
     }
 
     final baseUrl = dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+    final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
     final response = await http.post(
       Uri.parse('$baseUrl/api/admin/seed'),
-      headers: backendHeaders({'Content-Type': 'application/json'}),
+      headers: headers,
       body: json.encode({'collections': collections}),
     );
     if (response.statusCode != 200) {
