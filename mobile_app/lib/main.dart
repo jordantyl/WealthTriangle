@@ -11,6 +11,7 @@ import 'user/presentation/screens/login_screen.dart';
 import 'user/presentation/screens/profile_screen.dart';
 
 import 'academy/presentation/screens/academy_screen.dart';
+import 'academy/presentation/screens/paper_trading_screen.dart';
 import 'academy/application/academy_state.dart';
 
 import 'income/presentation/screens/income_screen.dart';
@@ -124,6 +125,7 @@ class WealthTriangleApp extends StatelessWidget {
                 watchlistTickers:Provider.of<WealthState>(context, listen: false).watchlist,
                 ),
               '/timemachine': (context) => const TimeMachineScreen(),
+              '/papertrading': (context) => const PaperTradingScreen(),
               '/settings': (context) => const SettingsScreen(),
             },
           );

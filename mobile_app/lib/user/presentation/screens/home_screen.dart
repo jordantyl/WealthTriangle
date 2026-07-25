@@ -157,6 +157,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   route: '/timemachine'),
             ),
             const SizedBox(height: 15),
+            SizedBox(
+              width: double.infinity,
+              child: _buildModuleCard(context,
+                  title: "📈 Paper Trading",
+                  icon: Icons.candlestick_chart,
+                  color: Colors.tealAccent,
+                  route: '/papertrading'),
+            ),
+            const SizedBox(height: 15),
 
             // Row 3: Passive Income Banner
             SizedBox(
