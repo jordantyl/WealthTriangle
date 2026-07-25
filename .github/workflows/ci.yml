@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/ -v
+
+  flutter-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      # lib/.env is gitignored (holds real secrets locally) but pubspec.yaml
+      # declares it as a bundled asset, so asset-bundling fails with no file
+      # present at all — a placeholder is enough since these are pure unit
+      # tests that never read dotenv.env values.
+      - run: touch lib/.env
+      - run: flutter test
