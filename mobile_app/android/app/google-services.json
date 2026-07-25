@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "6099096342",
+    "project_id": "wealthtriangle",
+    "storage_bucket": "wealthtriangle.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:6099096342:android:a2c25a39982359ba2cf637",
+        "android_client_info": {
+          "package_name": "com.example.wealth_triangle"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAY4yH4S9KtEFCAxqd4s6f7faC95SwXYL4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:6099096342:android:55c933955492f73d2cf637",
+        "android_client_info": {
+          "package_name": "com.tyljordan.wealthtriangle"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAY4yH4S9KtEFCAxqd4s6f7faC95SwXYL4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

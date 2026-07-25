@@ -1,0 +1,27 @@
+# Python
+backend/venv/
+backend/__pycache__/
+*.pyc
+
+# Flutter
+mobile_app/.dart_tool/
+mobile_app/build/
+mobile_app/android/.gradle/
+mobile_app/android/.kotlin/
+mobile_app/android/build/
+mobile_app/android/app/build/
+
+# IDE
+mobile_app/.idea/
+.vscode/
+.claude/settings.local.json
+
+# Secrets / env
+mobile_app/.env
+backend/.env
+*.env
+backend/serviceAccountKey.json
+backend/*serviceAccountKey*.json
+
+# Misc
+repomix-output.xml

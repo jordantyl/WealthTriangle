@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout 240 bash -c 'until grep -q \"Flutter run key commands\\\\|Error\\\\|error:\\\\|Exception\" /tmp/flutter_run_log.txt 2>/dev/null; do sleep 5; done')",
+      "Bash(export ADB=\"/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe\" *)",
+      "Bash(flutter pub *)",
+      "Bash(timeout 200 bash -c 'until grep -q \"Flutter run key commands\\\\|Unhandled Exception\\\\|Gradle task failed\" /tmp/flutter_run_log2.txt 2>/dev/null; do sleep 4; done')",
+      "Bash(timeout 200 bash -c 'until grep -q \"Flutter run key commands\\\\|Unhandled Exception\\\\|Gradle task failed\" /tmp/flutter_run_log3.txt 2>/dev/null; do sleep 4; done')",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 exec-out screencap -p)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1612)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1153)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input text claudetest___CMDSUB_OUTPUT__@example.com)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1326)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input text TestPass123!)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input text claudetest1@example.com)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 884)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input text TestPass123)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1064)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 700)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 858)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 973)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1168)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 792 1436)",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 534 1729)"
+    ],
+    "additionalDirectories": [
+      "C:\\invest lab\\mobile_app"
+    ]
+  }
+}
