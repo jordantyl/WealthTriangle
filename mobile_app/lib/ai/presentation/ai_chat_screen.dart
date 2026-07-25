@@ -5,6 +5,7 @@ import '../../user/application/wealth_state.dart';
 import '../../investment/application/portfolio_state.dart';
 import '../../academy/application/academy_state.dart';
 import '../../shared/app_theme_colors.dart';
+import '../../shared/simple_markdown_text.dart';
 
 class AIChatScreen extends StatefulWidget {
   const AIChatScreen({super.key});
@@ -127,7 +128,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
                       color: isUser ? Colors.blueAccent : colors.surfaceAlt,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Text(
+                    child: SimpleMarkdownText(
                       msg['content']!,
                       style: TextStyle(color: isUser ? Colors.white : colors.textPrimary),
                     ),
