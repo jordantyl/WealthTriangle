@@ -74,7 +74,7 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
         final data = json.decode(response.body);
         final responseText = data['response'] as String;
         try {
-          return json.decode(responseText);
+          return json.decode(_stripJsonFence(responseText));
         } catch (_) {
           return {
             'action': 'chat',
@@ -93,6 +93,22 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
           'I am having trouble connecting to my brain. Please make sure the backend server and Ollama are running.',
       'confirmation_needed': false,
     };
+  }
+
+  // Gemini (and sometimes other models) often wrap JSON replies in a
+  // ```json ... ``` markdown fence even when told to return raw JSON.
+  // json.decode() chokes on that, so strip it before parsing — otherwise
+  // the whole raw response (fence, braces, literal \n and all) leaks into
+  // the chat bubble as the fallback "message" instead of being parsed.
+  String _stripJsonFence(String text) {
+    var t = text.trim();
+    if (t.startsWith('```')) {
+      t = t.substring(3);
+      if (t.startsWith('json')) t = t.substring(4);
+      final end = t.lastIndexOf('```');
+      if (end != -1) t = t.substring(0, end);
+    }
+    return t.trim();
   }
 
   Future<String> executeTool(String action, Map<String, dynamic> params) async {
