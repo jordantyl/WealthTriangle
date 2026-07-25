@@ -32,11 +32,26 @@ class NewsArticle {
       source: json['publisher'] ?? json['source'] ?? '',
       url: json['link'] ?? json['url'] ?? '',
       imageUrl: json['thumbnail']?['resolutions']?[0]?['url'] ?? '',
-      publishedAt: DateTime.tryParse(json['providerPublishTime']?.toString() ?? '') ??
-          DateTime.fromMillisecondsSinceEpoch(
-              (json['providerPublishTime'] ?? 0) * 1000),
+      publishedAt: _parsePublishedAt(json['providerPublishTime']),
       fullText: json['summary'] ?? '',
     );
+  }
+
+  // providerPublishTime arrives either as an ISO-8601 string (current
+  // yfinance-backed /api/news) or a raw epoch-seconds number (older API
+  // shape). A bare digit string like "1700000000" is not reliably rejected
+  // by DateTime.tryParse — it can parse into a bogus date instead of
+  // returning null — so digit-only values are routed straight to the
+  // epoch-seconds path instead of through tryParse.
+  static DateTime _parsePublishedAt(dynamic raw) {
+    if (raw is num) {
+      return DateTime.fromMillisecondsSinceEpoch((raw * 1000).round());
+    }
+    final str = raw?.toString() ?? '';
+    if (RegExp(r'^\d+$').hasMatch(str)) {
+      return DateTime.fromMillisecondsSinceEpoch((int.tryParse(str) ?? 0) * 1000);
+    }
+    return DateTime.tryParse(str) ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
 }
 
