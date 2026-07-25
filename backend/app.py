@@ -265,9 +265,76 @@ def calendar_events_proxy():
 
 
 # =====================================================================
-# ✅ NEW: AI SUMMARY PROXY — keeps OpenAI key off the phone
+# ✅ AI SUMMARY PROXY — keeps API keys off the phone.
+# Tries Gemini first (matches /api/assistant's preference — it's the free,
+# already-working key), falls back to OpenAI if Gemini isn't configured or
+# fails. Previously this only tried OpenAI, so summaries silently fell back
+# to the client's hardcoded "Demo" text on any machine without an OpenAI key.
 # POST /api/summarize   body: {"text": "..."}
 # =====================================================================
+_SUMMARIZE_SYSTEM_PROMPT = (
+    "You are a financial educator helping beginner investors understand market news. "
+    'Always respond in valid JSON with exactly THREE keys: '
+    '"summary" (2-3 plain English sentences), '
+    '"sentiment" (one of: "Bullish", "Bearish", "Neutral"), and '
+    '"triangle_hint" (a 1-sentence educational insight connecting the news to the '
+    '"Return-Safety-Liquidity" Iron Triangle). '
+    "Do not include any text outside the JSON object."
+)
+
+
+def _summarize_user_prompt(article_text):
+    return (
+        "Summarize this financial article for a beginner, determine its sentiment, "
+        "and provide a Triangle (Return-Safety-Liquidity) insight:\n\n" + article_text
+    )
+
+
+def _parse_summary_json(content):
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    parsed = json.loads(content.strip())
+    return {
+        "summary": parsed.get("summary", ""),
+        "sentiment": parsed.get("sentiment", "Neutral"),
+        "triangle_hint": parsed.get(
+            "triangle_hint",
+            "Consider how this news affects the balance of Return, Safety, and Liquidity."
+        ),
+    }
+
+
+def _try_gemini_summarize(article_text):
+    prompt = _SUMMARIZE_SYSTEM_PROMPT + "\n\n" + _summarize_user_prompt(article_text)
+    content = _try_gemini(prompt)
+    return _parse_summary_json(content)
+
+
+def _try_openai_summarize(article_text):
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+        },
+        json={
+            "model": "gpt-3.5-turbo",
+            "max_tokens": 250,
+            "messages": [
+                {"role": "system", "content": _SUMMARIZE_SYSTEM_PROMPT},
+                {"role": "user", "content": _summarize_user_prompt(article_text)},
+            ],
+        },
+        timeout=20,
+    )
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"]
+    return _parse_summary_json(content)
+
+
 @app.route('/api/summarize', methods=['POST'])
 @limiter.limit("10 per minute")
 def summarize_proxy():
@@ -276,60 +343,26 @@ def summarize_proxy():
 
     if not article_text:
         return jsonify({"error": "text required"}), 400
-    if not OPENAI_API_KEY:
-        return jsonify({"error": "OPENAI_API_KEY not set on server"}), 500
 
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-            },
-            json={
-                "model": "gpt-3.5-turbo",
-                "max_tokens": 250,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a financial educator helping beginner investors understand market news. "
-                            'Always respond in valid JSON with exactly THREE keys: '
-                            '"summary" (2-3 plain English sentences), '
-                            '"sentiment" (one of: "Bullish", "Bearish", "Neutral"), and '
-                            '"triangle_hint" (a 1-sentence educational insight connecting the news to the '
-                            '"Return-Safety-Liquidity" Iron Triangle). '
-                            "Do not include any text outside the JSON object."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            "Summarize this financial article for a beginner, determine its sentiment, "
-                            "and provide a Triangle (Return-Safety-Liquidity) insight:\n\n" + article_text
-                        ),
-                    },
-                ],
-            },
-            timeout=20,
-        )
+    if GEMINI_API_KEY:
+        try:
+            return jsonify(_try_gemini_summarize(article_text))
+        except Exception as e:
+            print(f"Summarize Proxy Error (Gemini): {e}")
+            if not OPENAI_API_KEY:
+                return jsonify({"error": "AI summary is temporarily unavailable. Please try again."}), 502
 
-        if r.status_code != 200:
-            return jsonify({"error": f"OpenAI error {r.status_code}"}), 502
+    if OPENAI_API_KEY:
+        try:
+            return jsonify(_try_openai_summarize(article_text))
+        except Exception as e:
+            print(f"Summarize Proxy Error (OpenAI): {e}")
+            return jsonify({"error": "AI summary is temporarily unavailable. Please try again."}), 502
 
-        content = r.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
-        return jsonify({
-            "summary": parsed.get("summary", ""),
-            "sentiment": parsed.get("sentiment", "Neutral"),
-            "triangle_hint": parsed.get(
-                "triangle_hint",
-                "Consider how this news affects the balance of Return, Safety, and Liquidity."
-            ),
-        })
-    except Exception as e:
-        print(f"Summarize Proxy Error: {e}")
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "error": "AI summary isn't configured. Set GEMINI_API_KEY or "
+                  "OPENAI_API_KEY in the backend environment."
+    }), 502
 
 
 # =====================================================================
