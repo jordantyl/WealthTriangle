@@ -1,3 +1,4 @@
+import sys
 import os
 import json
 import requests
@@ -10,6 +11,39 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import yfinance as yf
 from algorithms import run_monte_carlo, calculate_historical_backtest, run_time_machine
+
+# Windows consoles default to the legacy cp1252 codepage unless the user has
+# opted into UTF-8 system-wide, which crashes any print() containing an emoji
+# (found via the "BACKEND_API_KEY not set" warning below) with a
+# UnicodeEncodeError, killing the server before it even starts listening.
+# Reconfiguring stdout/stderr here makes startup robust regardless of the
+# host OS/locale, instead of relying on a PYTHONIOENCODING env var nobody
+# will remember to set.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+# =====================================================================
+# 🔐 CRASH/ERROR REPORTING — opt-in like every other key in this file:
+# unset SENTRY_DSN means no-op (matches local dev with no account yet).
+# Get a free DSN at https://sentry.io (New Project > Flask):
+#   set SENTRY_DSN=https://xxxx@xxxx.ingest.sentry.io/xxxx   (Windows)
+#   export SENTRY_DSN=https://xxxx@xxxx.ingest.sentry.io/xxxx (Mac/Linux)
+# send_default_pii is explicitly OFF — this app handles real user emails
+# and financial profile data, none of which should leave the server
+# beyond the stack trace/request path Sentry needs to debug a crash.
+# =====================================================================
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.flask import FlaskIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[FlaskIntegration()],
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
 
 app = Flask(__name__)
 
@@ -105,6 +139,39 @@ def _require_firebase_user():
         return None  # Firebase Admin not configured — skip (see note above)
     if _verified_uid_or_none() is None:
         return jsonify({"error": "Unauthorized: valid Firebase sign-in required"}), 401
+    return None
+
+
+# =====================================================================
+# 🔐 ADMIN ALLOWLIST — separate from _require_firebase_user() above.
+# That check only proves "some signed-in user made this request"; every
+# real user of the app satisfies it, which meant /api/admin/seed (able to
+# overwrite shared Academy content for everyone) was reachable by anyone
+# who installed the app, not just its owner. Set ADMIN_UIDS to your own
+# Firebase UID(s) (comma-separated — Firebase Console > Authentication >
+# Users > copy the "User UID" column) to actually restrict it:
+#   set ADMIN_UIDS=abc123...        (Windows)
+#   export ADMIN_UIDS=abc123...     (Mac/Linux)
+# =====================================================================
+ADMIN_UIDS = {u.strip() for u in os.environ.get("ADMIN_UIDS", "").split(",") if u.strip()}
+
+
+def _require_admin_user():
+    """Returns None if OK to proceed, else a (response, status) error tuple.
+    Stricter than _require_firebase_user(): the caller's UID must also be
+    in ADMIN_UIDS, not merely a valid signed-in account."""
+    if _firestore_admin is None:
+        return None  # Firebase Admin not configured — skip (matches dev fallback above)
+    uid = _verified_uid_or_none()
+    if uid is None:
+        return jsonify({"error": "Unauthorized: valid Firebase sign-in required"}), 401
+    if not ADMIN_UIDS:
+        return jsonify({
+            "error": "Server misconfigured: set ADMIN_UIDS to at least one "
+                     "Firebase UID before this endpoint can be used."
+        }), 503
+    if uid not in ADMIN_UIDS:
+        return jsonify({"error": "Forbidden: admin access required"}), 403
     return None
 
 # =====================================================================
@@ -363,7 +430,16 @@ def _parse_summary_json(content):
 
 def _try_gemini_summarize(article_text):
     prompt = _SUMMARIZE_SYSTEM_PROMPT + "\n\n" + _summarize_user_prompt(article_text)
-    content = _try_gemini(prompt)
+    # Report NFR: summarization must respond in <5s. The default
+    # gemini-flash-latest model spends ~600+ tokens on internal "thinking"
+    # before answering (confirmed via usageMetadata.thoughtsTokenCount),
+    # averaging ~6s — over budget. gemini-flash-lite-latest skips that
+    # thinking pass entirely (no thoughtsTokenCount at all) and consistently
+    # answers in ~1.8-2s for this exact prompt shape, well within budget.
+    # Scoped to summarization only — the AI Assistant chat (/api/assistant)
+    # stays on the full model since answer depth there wasn't part of this
+    # performance requirement and wasn't asked to change.
+    content = _try_gemini(prompt, model="gemini-flash-lite-latest")
     return _parse_summary_json(content)
 
 
@@ -464,9 +540,9 @@ def _try_openai_assistant(prompt):
     return r.json()["choices"][0]["message"]["content"]
 
 
-def _try_gemini(prompt):
+def _try_gemini(prompt, model="gemini-flash-latest"):
     r = requests.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         headers={"Content-Type": "application/json"},
         params={"key": GEMINI_API_KEY},
         json={"contents": [{"parts": [{"text": prompt}]}]},
@@ -697,7 +773,7 @@ def admin_seed():
             "error": "Firebase Admin isn't set up — missing "
                      "backend/serviceAccountKey.json."
         }), 503
-    auth_error = _require_firebase_user()
+    auth_error = _require_admin_user()
     if auth_error:
         return auth_error
 

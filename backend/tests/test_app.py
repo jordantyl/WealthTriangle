@@ -7,9 +7,14 @@ import app as app_module
 def client():
     app_module.app.testing = True
     # The real Limiter instance is a module-level singleton with in-memory
-    # storage shared across every test in this process — disable it here so
-    # test order/count can never trip a real "10 per minute" limit.
+    # storage shared across every test in this process. Setting
+    # RATELIMIT_ENABLED=False alone doesn't actually stop counters from
+    # accumulating across tests (discovered when TestAdminSeed grew past 6
+    # requests to its "5 per minute" route and started getting real 429s) —
+    # explicitly reset the limiter's storage too, so test order/count can
+    # never trip a real limit.
     app_module.app.config["RATELIMIT_ENABLED"] = False
+    app_module.limiter.reset()
     return app_module.app.test_client()
 
 
@@ -291,6 +296,7 @@ class TestAdminSeed:
 
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdmin())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
 
         payload = {
             "collections": {
@@ -309,6 +315,7 @@ class TestAdminSeed:
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", object())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
         r = client.post(
             "/api/admin/seed", json={"collections": {}},
             headers={"X-API-Key": "secret123"},
@@ -323,3 +330,29 @@ class TestAdminSeed:
             headers={"X-API-Key": "secret123"},
         )
         assert r.status_code == 401
+
+    def test_rejects_a_valid_but_non_admin_user(self, client, monkeypatch):
+        # A real, signed-in user who is simply not in ADMIN_UIDS — this is
+        # the exact gap being closed: previously any signed-in user passed.
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
+        r = client.post(
+            "/api/admin/seed", json={"collections": {"academy_scenarios": {"a": {}}}},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 403
+
+    def test_rejects_when_admin_uids_not_configured(self, client, monkeypatch):
+        # Valid token, but the server has no ADMIN_UIDS set at all — fail
+        # closed rather than silently treating everyone as an admin.
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", set())
+        r = client.post(
+            "/api/admin/seed", json={"collections": {"academy_scenarios": {"a": {}}}},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 503
