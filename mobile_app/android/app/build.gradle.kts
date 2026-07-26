@@ -2,6 +2,12 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
+    // google-services.json was already present but this plugin was never
+    // actually applied — firebase_core/auth/firestore work fine without it
+    // (they're configured purely via firebase_options.dart), but Crashlytics
+    // needs it at build time to know which Firebase project to report to.
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {
@@ -34,6 +40,10 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -30,12 +33,30 @@ import 'investment/presentation/screens/time_machine_screen.dart';
 import 'user/presentation/screens/settings_screen.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  await dotenv.load(fileName: "lib/.env");
-  runApp(const WealthTriangleApp());
+  // runZonedGuarded catches async errors that happen outside Flutter's own
+  // error zone (e.g. inside a bare Future that nothing awaits) so those
+  // reach Crashlytics too, not just widget-build/layout errors.
+  await runZonedGuarded<Future<void>>(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    await dotenv.load(fileName: "lib/.env");
+
+    // Crashlytics has no web implementation — this project currently only
+    // ships Android + a web build, so gate it off there.
+    if (!kIsWeb) {
+      FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+      // Don't spam the Firebase console with local debug-run crashes.
+      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(!kDebugMode);
+    }
+
+    runApp(const WealthTriangleApp());
+  }, (error, stack) {
+    if (!kIsWeb) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+    }
+  });
 }
 
 class WealthTriangleApp extends StatelessWidget {
