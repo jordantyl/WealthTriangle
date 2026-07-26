@@ -1,0 +1,43 @@
+# Render Blueprint for the WealthTriangle Flask backend.
+# Deploy: Render Dashboard > New > Blueprint > point at this repo.
+# Render finds this file at the repo root and provisions the service below
+# from backend/ (rootDir), using the existing Procfile / requirements.txt.
+#
+# After the first deploy, set the "sync: false" env vars in the Render
+# dashboard (Environment tab) — they're intentionally left blank here so no
+# secret ever gets committed to git:
+#   BACKEND_API_KEY             same value as mobile_app/lib/.env's BACKEND_API_KEY
+#   ADMIN_UIDS                  your Firebase UID(s), comma-separated (see app.py)
+#   ALLOWED_ORIGINS             comma-separated web origins, if you host a web build
+#   FIREBASE_SERVICE_ACCOUNT_JSON   entire contents of serviceAccountKey.json
+#   GEMINI_API_KEY / OPENAI_API_KEY  at least one, for AI summaries/assistant
+#   SENTRY_DSN                  optional — enables crash reporting (see app.py)
+#
+# Once deployed, point the mobile app at the live URL: update
+# BACKEND_BASE_URL / PYTHON_BACKEND_URL in mobile_app/lib/.env from
+# http://10.0.2.2:5000 to https://<your-service>.onrender.com.
+services:
+  - type: web
+    name: wealthtriangle-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: BACKEND_API_KEY
+        sync: false
+      - key: ADMIN_UIDS
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
