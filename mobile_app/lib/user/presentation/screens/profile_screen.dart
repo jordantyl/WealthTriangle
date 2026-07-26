@@ -59,7 +59,7 @@ class ProfileScreen extends StatelessWidget {
     // Dynamic coloring based on their Academy assessment
     Color profileColor = Colors.greenAccent;
     if (academyState.riskProfile == 'Aggressive') profileColor = Colors.redAccent;
-    if (academyState.riskProfile == 'Moderate') profileColor = Colors.orangeAccent;
+    if (academyState.riskProfile == 'Balanced') profileColor = Colors.orangeAccent;
 
     return Scaffold(
       appBar: AppBar(title: const Text("My Profile")),
@@ -68,11 +68,34 @@ class ProfileScreen extends StatelessWidget {
         child: Column(
           children: [
             // USER HEADER
-            const Center(
-              child: CircleAvatar(
-                radius: 50,
-                backgroundColor: Colors.blueAccent,
-                child: Icon(Icons.person, size: 60, color: Colors.white),
+            Center(
+              child: GestureDetector(
+                onTap: () => _showAvatarPicker(context, wealthState),
+                child: Stack(
+                  children: [
+                    CircleAvatar(
+                      radius: 50,
+                      backgroundColor: Colors.blueAccent,
+                      child: Text(
+                        wealthState.avatarEmoji,
+                        style: const TextStyle(fontSize: 44),
+                      ),
+                    ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[800],
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: const Icon(Icons.edit, size: 14, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 15),
@@ -194,6 +217,48 @@ class ProfileScreen extends StatelessWidget {
                       label: Text(wealthState.financialGoal != null ? "Update Goal" : "Set Goal"),
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
                     ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
+            _buildSectionHeader("Preferred Sectors"),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Pick the sectors you're most interested in — tailors which stocks and news get surfaced first.",
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: WealthState.availableSectors.map((sector) {
+                      final selected = wealthState.preferredSectors.contains(sector);
+                      return FilterChip(
+                        label: Text(sector),
+                        selected: selected,
+                        selectedColor: Colors.blueAccent.withOpacity(0.25),
+                        checkmarkColor: Colors.blueAccent,
+                        onSelected: (isSelected) {
+                          final updated = List<String>.from(wealthState.preferredSectors);
+                          if (isSelected) {
+                            updated.add(sector);
+                          } else {
+                            updated.remove(sector);
+                          }
+                          wealthState.updatePreferredSectors(updated);
+                        },
+                      );
+                    }).toList(),
                   ),
                 ],
               ),
@@ -373,6 +438,48 @@ class ProfileScreen extends StatelessWidget {
             },
             child: const Text("SAVE"),
           ),
+        ],
+      ),
+    );
+  }
+
+  void _showAvatarPicker(BuildContext context, WealthState wealthState) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2D2D44),
+        title: const Text("Choose Your Avatar", style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            alignment: WrapAlignment.center,
+            children: WealthState.availableAvatars.map((emoji) {
+              final isSelected = wealthState.avatarEmoji == emoji;
+              return GestureDetector(
+                onTap: () {
+                  wealthState.updateAvatarEmoji(emoji);
+                  Navigator.pop(ctx);
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isSelected ? Colors.blueAccent.withOpacity(0.3) : Colors.transparent,
+                    border: Border.all(
+                      color: isSelected ? Colors.blueAccent : Colors.white24,
+                      width: 2,
+                    ),
+                  ),
+                  child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE")),
         ],
       ),
     );

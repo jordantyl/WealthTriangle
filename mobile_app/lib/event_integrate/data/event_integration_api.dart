@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import '../domain/economic_event.dart';
 import '../../firestore/constants/firestore_constants.dart';
 import '../../shared/backend_headers.dart';
@@ -113,11 +116,13 @@ class EventIntegrationService {
     }
   }
 
-  Future<String> exportSimulationAsCSV(String userId) async {
+  /// Shared data source for both CSV and PDF exports — reads the SAME
+  /// collection the Time Machine writes to (was 'simulation_history'
+  /// hardcoded while the history screen read 'SIMULATIONHISTORY' — two
+  /// different collections).
+  Future<List<Map<String, dynamic>>> fetchSimulationHistoryForExport(
+      String userId) async {
     try {
-      // ✅ FIXED: now reads the SAME collection the Time Machine writes to
-      // (was 'simulation_history' hardcoded while the history screen read
-      // 'SIMULATIONHISTORY' — two different collections).
       final snap = await _db
           .collection(FirestoreConstants.usersCollection)
           .doc(userId)
@@ -126,36 +131,161 @@ class EventIntegrationService {
           .limit(50)
           .get();
 
-      final buffer = StringBuffer();
-      buffer.writeln(
-          'Date,Ticker,Start Date,End Date,Initial Capital,Final Capital,CAGR (%),Max Drawdown (%),Liquidity,Slippage (%)');
-
-      for (final doc in snap.docs) {
+      return snap.docs.map((doc) {
         final d = doc.data();
         final created = d['createdAt'] is Timestamp
             ? (d['createdAt'] as Timestamp).toDate().toIso8601String()
             : '';
-        buffer.writeln(
-          '$created,'
-          '${d['stockTicker'] ?? ''},'
-          '${d['startDate'] ?? ''},'
-          '${d['endDate'] ?? ''},'
-          '${d['initialCapital'] ?? ''},'
-          '${d['finalCapital'] ?? ''},'
+        return {
+          'date': created,
+          'ticker': d['stockTicker'] ?? '',
+          'startDate': d['startDate'] ?? '',
+          'endDate': d['endDate'] ?? '',
+          'initialCapital': d['initialCapital'] ?? 0,
+          'finalCapital': d['finalCapital'] ?? 0,
           // ✅ FIXED: cagr/maxDrawdown are already stored as percentages;
           // the old code multiplied by 100 again.
-          '${d['cagr'] ?? 0},'
-          '${d['maxDrawdown'] ?? 0},'
-          '${d['liquidityLabel'] ?? ''},'
-          '${d['slippagePct'] ?? 0}',
-        );
-      }
-
-      return buffer.toString();
+          'cagr': d['cagr'] ?? 0,
+          'maxDrawdown': d['maxDrawdown'] ?? 0,
+          'liquidityLabel': d['liquidityLabel'] ?? '',
+          'slippagePct': d['slippagePct'] ?? 0,
+        };
+      }).toList();
     } catch (_) {
-      return 'Date,Ticker,Start Date,End Date,Initial Capital,Final Capital,CAGR (%),Max Drawdown (%),Liquidity,Slippage (%)\n'
-          '${DateTime.now()},AAPL,2020-01-01,2023-01-01,10000,15234,14.5,-23.1,High,0.01\n';
+      return [
+        {
+          'date': DateTime.now().toIso8601String(),
+          'ticker': 'AAPL',
+          'startDate': '2020-01-01',
+          'endDate': '2023-01-01',
+          'initialCapital': 10000,
+          'finalCapital': 15234,
+          'cagr': 14.5,
+          'maxDrawdown': -23.1,
+          'liquidityLabel': 'High',
+          'slippagePct': 0.01,
+        }
+      ];
     }
+  }
+
+  Future<String> exportSimulationAsCSV(String userId) async {
+    final rows = await fetchSimulationHistoryForExport(userId);
+
+    final buffer = StringBuffer();
+    buffer.writeln(
+        'Date,Ticker,Start Date,End Date,Initial Capital,Final Capital,CAGR (%),Max Drawdown (%),Liquidity,Slippage (%)');
+
+    for (final r in rows) {
+      buffer.writeln(
+        '${r['date']},'
+        '${r['ticker']},'
+        '${r['startDate']},'
+        '${r['endDate']},'
+        '${r['initialCapital']},'
+        '${r['finalCapital']},'
+        '${r['cagr']},'
+        '${r['maxDrawdown']},'
+        '${r['liquidityLabel']},'
+        '${r['slippagePct']}',
+      );
+    }
+
+    return buffer.toString();
+  }
+
+  /// Renders the same simulation history into a formatted PDF report
+  /// (Report §1.6.1.1 Event & Integration Module — "export of performance
+  /// reports"). Returns raw PDF bytes ready to write to a file and share.
+  Future<Uint8List> exportSimulationAsPDF(String userId) async {
+    final rows = await fetchSimulationHistoryForExport(userId);
+    final doc = pw.Document();
+
+    final headers = [
+      'Date',
+      'Ticker',
+      'Start',
+      'End',
+      'Initial (\$)',
+      'Final (\$)',
+      'CAGR (%)',
+      'Max DD (%)',
+      'Liquidity',
+      'Slippage (%)',
+    ];
+
+    final data = rows.map((r) {
+      final dateStr = (r['date'] as String).isNotEmpty
+          ? (r['date'] as String).split('T').first
+          : '-';
+      return [
+        dateStr,
+        '${r['ticker']}',
+        '${r['startDate']}',
+        '${r['endDate']}',
+        '${r['initialCapital']}',
+        '${r['finalCapital']}',
+        '${r['cagr']}',
+        '${r['maxDrawdown']}',
+        '${r['liquidityLabel']}',
+        '${r['slippagePct']}',
+      ];
+    }).toList();
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        header: (context) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              'WealthTriangle — Performance Report',
+              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              'Time Machine simulation history & Iron Triangle metrics',
+              style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            ),
+            pw.SizedBox(height: 2),
+            pw.Text(
+              'Generated ${DateTime.now().toIso8601String().split('T').first}',
+              style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+            ),
+            pw.Divider(),
+          ],
+        ),
+        build: (context) => [
+          if (data.isEmpty)
+            pw.Text('No simulation history found for this account.')
+          else
+            pw.TableHelper.fromTextArray(
+              headers: headers,
+              data: data,
+              headerStyle: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: 9,
+                  color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue800),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              cellAlignment: pw.Alignment.centerLeft,
+              cellPadding:
+                  const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+            ),
+        ],
+        footer: (context) => pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text(
+            'Page ${context.pageNumber} of ${context.pagesCount}',
+            style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+          ),
+        ),
+      ),
+    );
+
+    return doc.save();
   }
 
   List<EconomicEvent> _getMockEvents(List<String> tickers) {

@@ -103,7 +103,7 @@ class InvestRecommendationCard extends StatelessWidget {
         triangleNote:
             "Your profile chases RETURN. Watch the Safety corner — run a Time Machine test through 2020 or 2022 before committing.",
       );
-    } else if (profile.startsWith("Moderate")) {
+    } else if (profile.startsWith("Balanced")) {
       rec = _Rec(
         icon: Icons.balance,
         color: Colors.orangeAccent,

@@ -5,6 +5,7 @@ import '../../../user/application/wealth_state.dart';
 import '../../../investment/application/portfolio_state.dart';
 import '../../../event_integrate/application/event_intelligence_state.dart';
 import '../../../event_integrate/domain/economic_event.dart';
+import 'cash_flow_screen.dart';
 
 class IncomeScreen extends StatefulWidget {
   const IncomeScreen({super.key});
@@ -161,6 +162,13 @@ class _IncomeScreenState extends State<IncomeScreen> {
         title: const Text("Passive Income"),
         actions: [
           IconButton(
+              icon: const Icon(Icons.pie_chart_outline),
+              tooltip: "Cash Flow Analysis",
+              onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const CashFlowScreen()))),
+          IconButton(
               icon: const Icon(Icons.add),
               onPressed: () => _showAddDialog(context)),
         ],
@@ -238,6 +246,45 @@ class _IncomeScreenState extends State<IncomeScreen> {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const CashFlowScreen())),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2D2D44),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.pie_chart_outline, color: Colors.amberAccent),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("Cash Flow Analysis",
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold)),
+                          Text(
+                              "Capital gains vs. passive income, side by side",
+                              style: TextStyle(
+                                  color: Colors.grey, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: Colors.grey),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 5),
             child: Align(

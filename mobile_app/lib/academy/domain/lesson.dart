@@ -4,7 +4,7 @@ class Lesson {
   final String description;
   final String difficulty; // 'Beginner', 'Intermediate', 'Advanced'
   final int xpReward;
-  final String riskProfileMatch; // 'Conservative', 'Moderate', 'Aggressive', 'All'
+  final String riskProfileMatch; // 'Conservative', 'Balanced', 'Aggressive', 'All'
 
   Lesson({
     required this.id,

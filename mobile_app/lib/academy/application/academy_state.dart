@@ -322,7 +322,7 @@ class AcademyState extends ChangeNotifier {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    String determinedProfile = 'Moderate';
+    String determinedProfile = 'Balanced';
     if (finalScore >= 400) {
       determinedProfile = 'Aggressive';
     } else if (finalScore <= 200) {
@@ -755,7 +755,11 @@ class AcademyState extends ChangeNotifier {
         final data = doc.data() as Map<String, dynamic>;
         // XP comes solely from academy/stats (see _loadUserData/_saveStats) —
         // this doc's 'RiskProfile' is still the right source for risk profile.
-        _riskProfile = data['RiskProfile'] ?? 'Conservative';
+        // Older accounts may still have 'Moderate' stored from before the
+        // report-aligned rename to 'Balanced' — normalize on read so their
+        // tailored lessons/coloring keep matching without a re-quiz.
+        final rawProfile = data['RiskProfile'] ?? 'Conservative';
+        _riskProfile = rawProfile == 'Moderate' ? 'Balanced' : rawProfile;
         notifyListeners();
       }
     } catch (e) {

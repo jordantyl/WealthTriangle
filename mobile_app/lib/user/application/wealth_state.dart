@@ -34,6 +34,11 @@ class WealthState extends ChangeNotifier {
   DateTime? _goalDate;
   TrianglePreference _trianglePreference = TrianglePreference.balanced; // ✅ NEW
 
+  // ✅ NEW: Personalized Investor Profile (Report §1.4.2 item 5 — avatar +
+  // preferred sectors, alongside the financial goal already tracked above).
+  String _avatarEmoji = '🧑‍💼';
+  List<String> _preferredSectors = [];
+
   final List<IncomeSource> _incomeSources = [];
   final List<String> _incomeSourceIds = []; // ✅ Track Firestore doc IDs
 
@@ -48,6 +53,38 @@ class WealthState extends ChangeNotifier {
 
   double? get financialGoal => _financialGoal;
   DateTime? get goalDate => _goalDate;
+
+  String get avatarEmoji => _avatarEmoji;
+  List<String> get preferredSectors => _preferredSectors;
+
+  static const List<String> availableSectors = [
+    'Technology',
+    'Healthcare',
+    'Financials',
+    'Energy',
+    'Consumer',
+    'Real Estate',
+    'Industrials',
+    'Utilities',
+    'Crypto / Web3',
+    'Index Funds',
+  ];
+
+  static const List<String> availableAvatars = [
+    '🧑‍💼', '👩‍💼', '🧑‍🎓', '👩‍🎓', '🧑‍🚀', '🦁', '🐢', '🦉', '🐺', '🐸',
+  ];
+
+  Future<void> updateAvatarEmoji(String emoji) async {
+    _avatarEmoji = emoji;
+    notifyListeners();
+    await _pushToCloud();
+  }
+
+  Future<void> updatePreferredSectors(List<String> sectors) async {
+    _preferredSectors = sectors;
+    notifyListeners();
+    await _pushToCloud();
+  }
 
   double get triangleHealthScore {
     // 1. Safety Factor (Emergency Fund)
@@ -206,6 +243,13 @@ class WealthState extends ChangeNotifier {
         if (data.containsKey('watchlist')) {
           _watchlist = List<String>.from(data['watchlist']);
         }
+        // ✅ LOAD PERSONALIZED PROFILE (avatar + preferred sectors)
+        if (data.containsKey('avatarEmoji')) {
+          _avatarEmoji = data['avatarEmoji'] ?? _avatarEmoji;
+        }
+        if (data.containsKey('preferredSectors')) {
+          _preferredSectors = List<String>.from(data['preferredSectors']);
+        }
         // ✅ LOAD PREFERENCE
         final prefIndex = data['trianglePreference'];
         if (prefIndex is int &&
@@ -250,6 +294,8 @@ class WealthState extends ChangeNotifier {
         'goalDate': _goalDate?.toIso8601String(),
         'watchlist': _watchlist, // ✅ SAVE WATCHLIST
         'trianglePreference': _trianglePreference.index, // ✅ SAVE PREFERENCE
+        'avatarEmoji': _avatarEmoji, // ✅ SAVE PERSONALIZED PROFILE
+        'preferredSectors': _preferredSectors,
         'lastUpdated': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }

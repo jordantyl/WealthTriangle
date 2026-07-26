@@ -22,7 +22,7 @@ class ExportReportScreen extends StatefulWidget {
 class _ExportReportScreenState extends State<ExportReportScreen> {
   bool _isExporting = false;
   bool _exportSuccess = false;
-  String _exportFormat = 'CSV'; // CSV or PDF (PDF stub)
+  String _exportFormat = 'CSV'; // CSV or PDF — both fully supported
 
   @override
   Widget build(BuildContext context) {
@@ -204,7 +204,7 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
                     ),
                   ),
                   Text(
-                    format == 'CSV' ? 'Spreadsheet' : 'Coming soon',
+                    format == 'CSV' ? 'Spreadsheet' : 'Formatted document',
                     style: TextStyle(
                         color: colors.textTertiary, fontSize: 10),
                   ),
@@ -222,9 +222,7 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: _isExporting || _exportFormat == 'PDF'
-            ? null
-            : _exportReport,
+        onPressed: _isExporting ? null : _exportReport,
         icon: _isExporting
             ? const SizedBox(
                 width: 16,
@@ -234,17 +232,11 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
               )
             : const Icon(Icons.file_download_outlined, size: 18),
         label: Text(
-          _isExporting
-              ? 'Generating...'
-              : _exportFormat == 'PDF'
-                  ? 'PDF Coming Soon'
-                  : 'Export as CSV',
+          _isExporting ? 'Generating...' : 'Export as $_exportFormat',
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: _exportFormat == 'PDF'
-              ? colors.surfaceAlt
-              : const Color(0xFF1E88E5),
+          backgroundColor: const Color(0xFF1E88E5),
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 16),
           shape:
@@ -304,11 +296,19 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
     setState(() => _isExporting = true);
 
     try {
-      final csv = await widget.service.exportSimulationAsCSV(widget.userId);
       final dir = await getTemporaryDirectory();
-      final file = File(
-          '${dir.path}/WealthTriangle_Report_${DateTime.now().millisecondsSinceEpoch}.csv');
-      await file.writeAsString(csv);
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final File file;
+
+      if (_exportFormat == 'PDF') {
+        final bytes = await widget.service.exportSimulationAsPDF(widget.userId);
+        file = File('${dir.path}/WealthTriangle_Report_$timestamp.pdf');
+        await file.writeAsBytes(bytes);
+      } else {
+        final csv = await widget.service.exportSimulationAsCSV(widget.userId);
+        file = File('${dir.path}/WealthTriangle_Report_$timestamp.csv');
+        await file.writeAsString(csv);
+      }
 
       await Share.shareXFiles(
         [XFile(file.path)],

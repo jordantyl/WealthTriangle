@@ -145,7 +145,7 @@ class PortfolioState extends ChangeNotifier {
     if (totalVal == 0) return "New Investor";
     double avgRisk = totalRisk / totalVal;
     if (avgRisk < 30) return "Conservative 🛡️";
-    if (avgRisk < 60) return "Moderate ⚖️";
+    if (avgRisk < 60) return "Balanced ⚖️";
     return "Aggressive 🚀";
   }
 
