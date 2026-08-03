@@ -3,6 +3,7 @@ import 'package:provider/provider.dart'; // Add Provider
 import '../domain/news_article.dart';
 import '../application/market_intelligence_state.dart';
 import '../../shared/app_theme_colors.dart';
+import '../../investment/application/portfolio_state.dart';
 import 'news_detail_screen.dart';
 
 class MarketIntelligenceScreen extends StatefulWidget {
@@ -19,14 +20,24 @@ class MarketIntelligenceScreen extends StatefulWidget {
 }
 
 class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
+  // Tickers the user actually holds in their portfolio — prioritized ahead
+  // of watchlistTickers (see MarketIntelligenceState.loadNews). Same
+  // pattern as event_calendar_screen.dart's _heldTickers getter.
+  List<String> get _heldTickers => Provider.of<PortfolioState>(context, listen: false)
+      .holdings
+      .map((h) => h.ticker)
+      .toList();
+
+  void _load() {
+    Provider.of<MarketIntelligenceState>(context, listen: false)
+        .loadNews(widget.watchlistTickers, heldTickers: _heldTickers);
+  }
+
   @override
   void initState() {
     super.initState();
     // Fetch data using Provider on load
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<MarketIntelligenceState>(context, listen: false)
-          .loadNews(widget.watchlistTickers);
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   @override
@@ -44,8 +55,7 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.refresh, color: colors.textSecondary),
-            onPressed: () =>
-                state.loadNews(widget.watchlistTickers), // Using state
+            onPressed: _load,
           ),
         ],
       ),
@@ -229,7 +239,7 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
   Widget _buildNewsFeed(MarketIntelligenceState state) {
     final colors = context.appColors;
     return RefreshIndicator(
-      onRefresh: () => state.loadNews(widget.watchlistTickers),
+      onRefresh: () async => _load(),
       color: const Color(0xFF1E88E5),
       backgroundColor: colors.surface,
       child: ListView.builder(
@@ -284,9 +294,13 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Source + sentiment badge row
+                  // Held/watchlist + source + sentiment badge row
                   Row(
                     children: [
+                      if (article.isHeld) ...[
+                        _buildHeldBadge(),
+                        const SizedBox(width: 6),
+                      ],
                       Text(
                         article.source.toUpperCase(),
                         style: const TextStyle(
@@ -399,6 +413,27 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // Same "📌 Held" convention as event_calendar_screen.dart's held/watchlist
+  // badge — marks news whose relatedTicker is something the user owns.
+  Widget _buildHeldBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFA726).withOpacity(0.15),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFFFA726).withOpacity(0.5)),
+      ),
+      child: const Text(
+        '📌 Held',
+        style: TextStyle(
+          color: Color(0xFFFFA726),
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );

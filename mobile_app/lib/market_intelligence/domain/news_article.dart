@@ -6,10 +6,16 @@ class NewsArticle {
   final String imageUrl;
   final DateTime publishedAt;
   final String fullText;
+  final String relatedTicker;
   String? aiSummary;
   SentimentLabel? sentiment;
   String? triangleHint; // ✅ NEW
   bool isLoadingSummary;
+  // Whether relatedTicker is a stock the user currently holds in their
+  // portfolio, as opposed to one only on their watchlist. Set after fetch by
+  // MarketIntelligenceState.loadNews() — not persisted. Same pattern as
+  // EconomicEvent.isHeld in event_integrate/domain/economic_event.dart.
+  bool isHeld;
 
   NewsArticle({
     required this.id,
@@ -19,10 +25,12 @@ class NewsArticle {
     this.imageUrl = '',
     required this.publishedAt,
     this.fullText = '',
+    this.relatedTicker = '',
     this.aiSummary,
     this.sentiment,
     this.triangleHint, // ✅ NEW
     this.isLoadingSummary = false,
+    this.isHeld = false,
   });
 
   factory NewsArticle.fromJson(Map<String, dynamic> json) {
@@ -34,6 +42,7 @@ class NewsArticle {
       imageUrl: json['thumbnail']?['resolutions']?[0]?['url'] ?? '',
       publishedAt: _parsePublishedAt(json['providerPublishTime']),
       fullText: json['summary'] ?? '',
+      relatedTicker: json['related_ticker'] ?? '',
     );
   }
 

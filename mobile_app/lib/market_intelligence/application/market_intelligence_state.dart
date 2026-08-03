@@ -26,14 +26,43 @@ class MarketIntelligenceState extends ChangeNotifier {
     return _articles.where((a) => a.sentiment?.displayName == _filterSentiment).toList();
   }
 
-  // Load news from the API
-  Future<void> loadNews(List<String> watchlistTickers) async {
+  // Load news from the API. Held (portfolio) tickers matter more than ones
+  // merely on the watchlist, so they go first in the fetch list — the
+  // backend only queries the first 5 tickers, and dedup keeps whichever
+  // ticker's query surfaced an article first — then any article tagged with
+  // a held ticker is sorted to the top of the feed. Same "held first"
+  // convention as EventIntegrationState.loadData().
+  Future<void> loadNews(List<String> watchlistTickers, {List<String> heldTickers = const []}) async {
     _isLoading = true;
     notifyListeners();
 
+    final tickerSet = <String>{...heldTickers, ...watchlistTickers};
+    final heldSet = heldTickers.map((t) => t.toUpperCase()).toSet();
+
     try {
-      _articles = await _api.fetchWatchlistNews(watchlistTickers);
+      final fetched = await _api.fetchWatchlistNews(tickerSet.toList());
+      for (final article in fetched) {
+        article.isHeld = heldSet.contains(article.relatedTicker.toUpperCase());
+      }
+      fetched.sort((a, b) {
+        if (a.isHeld != b.isHeld) return a.isHeld ? -1 : 1;
+        return b.publishedAt.compareTo(a.publishedAt);
+      });
+      _articles = fetched;
       _isMockNews = _api.lastNewsFetchWasMock;
+
+      // Classify the whole feed's sentiment right away (one batched AI
+      // call) so cards show a Bullish/Bearish/Neutral badge immediately
+      // instead of requiring a tap into each article. Best-effort: articles
+      // stay unclassified (falls back to "Tap for AI analysis") if this
+      // fails rather than blocking the feed from showing at all.
+      if (!_isMockNews) {
+        final sentiments = await _api.classifyArticles(fetched);
+        for (final article in fetched) {
+          final sentiment = sentiments[article.id];
+          if (sentiment != null) article.sentiment = sentiment;
+        }
+      }
     } catch (e) {
       print("Error loading news: $e");
       _isMockNews = true;

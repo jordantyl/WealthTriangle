@@ -88,6 +88,54 @@ class MarketIntelligenceService {
     }
   }
 
+  /// Classifies a whole batch of articles as Bullish/Bearish/Neutral in ONE
+  /// AI call (see backend's /api/classify_news) instead of one call per
+  /// article — auto-runs right after fetchWatchlistNews() so the feed shows
+  /// sentiment badges immediately, without the user tapping into each
+  /// article individually. Returns an id -> SentimentLabel map; missing/failed
+  /// entries are simply absent (callers leave those articles unclassified
+  /// rather than showing a guessed sentiment).
+  Future<Map<String, SentimentLabel>> classifyArticles(List<NewsArticle> articles) async {
+    if (articles.isEmpty) return {};
+    try {
+      final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/classify_news'),
+            headers: headers,
+            body: json.encode({
+              'articles': articles
+                  .map((a) => {
+                        'id': a.id,
+                        'title': a.title,
+                        'text': a.fullText,
+                      })
+                  .toList(),
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final results = data['results'];
+        if (results is List) {
+          final map = <String, SentimentLabel>{};
+          for (final entry in results) {
+            final id = entry['id']?.toString();
+            final sentiment = entry['sentiment']?.toString();
+            if (id != null && sentiment != null) {
+              map[id] = parseSentiment(sentiment);
+            }
+          }
+          return map;
+        }
+      }
+    } catch (e) {
+      print("Error classifying news: $e");
+    }
+    return {};
+  }
+
   SentimentLabel parseSentiment(String raw) {
     switch (raw.toLowerCase()) {
       case 'bullish':
