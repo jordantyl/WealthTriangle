@@ -21,7 +21,8 @@ class SimulationResult {
   final String volatilityLabel; // "Low", "Medium", "High"
   final String liquidityLabel;
   final double cagr;
-
+  final double momentumScore;  // -1..1, blends RSI/MACD/MA50 (report 3.1.1)
+  final String marketRegime;   // "Bull", "Bear", "Neutral" (FR 2.3)
 
   SimulationResult({
     required this.ticker,
@@ -44,6 +45,8 @@ class SimulationResult {
     required this.volatilityLabel,
     required this.liquidityLabel,
     required this.cagr,
+    required this.momentumScore,
+    required this.marketRegime,
   });
 
   factory SimulationResult.fromJson(Map<String, dynamic> json) {
@@ -74,6 +77,8 @@ class SimulationResult {
       volatilityLabel: json['volatility_label'] ?? 'Medium',
       liquidityLabel: json['liquidity_label'] ?? 'High',
       cagr: (json['cagr'] ?? 0).toDouble(),
+      momentumScore: (json['momentum_score'] ?? 0).toDouble(),
+      marketRegime: json['market_regime'] ?? 'Neutral',
     );
   }
 

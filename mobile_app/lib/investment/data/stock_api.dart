@@ -60,6 +60,8 @@ class StockApi {
           volatilityLabel: volatilityLabel,
           liquidityLabel: liquidityLabel,
           cagr: 0.0,
+          momentumScore: (data['momentum_score'] ?? 0).toDouble(),
+          marketRegime: data['market_regime'] ?? 'Neutral',
         );
       } else {
         throw Exception("Server Error: ${response.statusCode}");

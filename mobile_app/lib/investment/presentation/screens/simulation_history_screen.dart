@@ -8,10 +8,15 @@ import '../../../firestore/constants/firestore_constants.dart';
 class SimulationHistoryScreen extends StatelessWidget {
   const SimulationHistoryScreen({super.key});
 
+  // Same rule the backend uses (app.py): .KL tickers are Malaysia (KLCI) and
+  // priced in MYR, everything else (e.g. US/S&P500 tickers) is USD.
+  static String _currencyCodeForTicker(String ticker) {
+    return ticker.toUpperCase().endsWith('.KL') ? 'MYR' : 'USD';
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    final currencyFormat = NumberFormat.simpleCurrency(name: 'USD');
 
     return Scaffold(
       appBar: AppBar(title: const Text("My Simulation History")),
@@ -50,6 +55,9 @@ class SimulationHistoryScreen extends StatelessWidget {
                     final double finalCap =
                         (data['finalCapital'] as num?)?.toDouble() ?? 0;
                     final bool isWin = finalCap >= initial;
+                    final currencyFormat = NumberFormat.simpleCurrency(
+                        name: _currencyCodeForTicker(
+                            (data['stockTicker'] ?? '').toString()));
 
                     return Card(
                       color: const Color(0xFF2D2D44),

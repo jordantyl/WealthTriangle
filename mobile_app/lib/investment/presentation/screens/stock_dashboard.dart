@@ -15,6 +15,8 @@ import '../../domain/simulation_result.dart';
 import '../widgets/triangle_radar_chart.dart';
 import '../../../user/application/wealth_state.dart';
 import '../../../shared/backend_headers.dart';
+import '../../../firestore/constants/firestore_constants.dart';
+import '../../../academy/presentation/screens/learning_path_screen.dart';
 import 'add_transaction_screen.dart';
 import 'simulation_history_screen.dart';
 
@@ -380,6 +382,14 @@ class _StockDashboardState extends State<StockDashboard> {
                         _buildTag("Trend: ${_data!.trend.name.toUpperCase()}", _data!.trend == Trend.up ? Colors.green : Colors.red),
                         const SizedBox(width: 10),
                         _buildTag("AI: ${_data!.aiSentiment}", _data!.aiSentiment == "Positive" ? Colors.green : Colors.orange),
+                        const SizedBox(width: 10),
+                        // FR 2.3: Bull/Bear market-regime visual, derived from the
+                        // same momentum score (RSI + MACD + price-vs-MA50) that
+                        // drives the momentum-adjusted Monte Carlo simulation.
+                        _buildTag("Regime: ${_data!.marketRegime.toUpperCase()}",
+                            _data!.marketRegime == 'Bull'
+                                ? Colors.green
+                                : (_data!.marketRegime == 'Bear' ? Colors.red : Colors.grey)),
                       ],
                     ),
                     const SizedBox(height: 10),
@@ -404,6 +414,7 @@ class _StockDashboardState extends State<StockDashboard> {
                       ),
                     ),
                     const SizedBox(height: 10),
+                    _buildRiskWarningBanner(portfolio, _data!),
                     _buildTriangleAttributes(_data!),
                     const SizedBox(height: 20),
                     const Text("TIME MACHINE FORECAST", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 1.2)),
@@ -526,6 +537,72 @@ class _StockDashboardState extends State<StockDashboard> {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(4), border: Border.all(color: color.withOpacity(0.5))),
       child: Text(text, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  /// Report 3.1.5 closed loop: a Conservative user looking at a simulation
+  /// with a large drawdown should get a warning + a way to act on it, not
+  /// just a static profile-based suggestion. Compares the live simulation's
+  /// maxDrawdown against the user's classified risk profile and, when they
+  /// mismatch, surfaces a warning banner linking straight into a matching
+  /// Academy lesson.
+  Widget _buildRiskWarningBanner(PortfolioState portfolio, SimulationResult data) {
+    final profile = portfolio.investorType; // e.g. "Conservative 🛡️"
+    const conservativeDrawdownThreshold = -20.0;
+    const balancedDrawdownThreshold = -35.0;
+
+    final isConservative = profile.startsWith('Conservative');
+    final isBalanced = profile.startsWith('Balanced');
+    final threshold = isConservative
+        ? conservativeDrawdownThreshold
+        : (isBalanced ? balancedDrawdownThreshold : null);
+
+    if (threshold == null || data.maxDrawdown > threshold) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.redAccent.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 18),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    "Risk mismatch: your profile is $profile, but ${data.ticker} shows a "
+                    "Max Drawdown of ${data.maxDrawdown.toStringAsFixed(1)}%.",
+                    style: const TextStyle(
+                        color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12.5),
+                  ),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LearningPathScreen()),
+                ),
+                icon: const Icon(Icons.school, size: 16, color: Colors.redAccent),
+                label: const Text("Review a matching lesson",
+                    style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -652,20 +729,25 @@ class _StockDashboardState extends State<StockDashboard> {
     if (user == null || _data == null) return;
 
     try {
+      // Aligned with FirestoreConstants.simulationHistorySubCollection and
+      // the field names TimeMachineScreen writes, so this save path is
+      // actually visible in SimulationHistoryScreen and CSV/PDF export
+      // (report FR 7.3) instead of landing in an orphaned collection.
       await FirebaseFirestore.instance
-          .collection('users')
+          .collection(FirestoreConstants.usersCollection)
           .doc(user.uid)
-          .collection('SIMULATIONHISTORY')
+          .collection(FirestoreConstants.simulationHistorySubCollection)
           .add({
-        'StockTicker': _data!.ticker,
-        'Period': _selectedPeriod,
-        'ExpectedPrice': _data!.expected,
-        'WorstCase': _data!.worst,
-        'BestCase': _data!.best,
-        'RiskScore': _data!.riskScore,
-        'cagr': _data!.cagr, 
+        'stockTicker': _data!.ticker,
+        'startDate': _selectedPeriod,
+        'endDate': '1Y prediction',
+        'initialCapital': _data!.price,
+        'finalCapital': _data!.expected,
+        'cagr': _data!.cagr,
         'maxDrawdown': _data!.maxDrawdown,
-        'Timestamp': FieldValue.serverTimestamp(),
+        'riskScore': _data!.riskScore,
+        'liquidityLabel': _data!.liquidityLabel,
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (mounted) {

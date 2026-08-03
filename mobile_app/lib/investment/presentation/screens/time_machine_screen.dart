@@ -147,7 +147,8 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.simpleCurrency(name: 'USD');
+    final currencyCode = _result?['currency_code'] ?? 'USD';
+    final currency = NumberFormat.simpleCurrency(name: currencyCode);
     final fmt = DateFormat('dd MMM yyyy');
 
     return Scaffold(
