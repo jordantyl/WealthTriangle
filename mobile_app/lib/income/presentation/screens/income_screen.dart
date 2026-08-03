@@ -98,7 +98,7 @@ class _IncomeScreenState extends State<IncomeScreen> {
                       const InputDecoration(labelText: "Name (e.g. YouTube)")),
               TextField(
                   controller: amountController,
-                  decoration: const InputDecoration(labelText: "Amount (\$)"),
+                  decoration: const InputDecoration(labelText: "Amount (RM)"),
                   keyboardType: TextInputType.number),
               const SizedBox(height: 15),
               // ✅ NEW: frequency selector
@@ -154,8 +154,8 @@ class _IncomeScreenState extends State<IncomeScreen> {
     // whenever the portfolio notifies.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeLoadDividends());
 
-    double simulatedAnnualDividend = portfolio.totalSimulatedAnnualDividend;
-    double simulatedMonthlyDividend = simulatedAnnualDividend / 12;
+    double totalAnnualDividend = portfolio.totalAnnualDividendIncome;
+    double totalMonthlyDividend = totalAnnualDividend / 12;
 
     return Scaffold(
       appBar: AppBar(
@@ -189,7 +189,7 @@ class _IncomeScreenState extends State<IncomeScreen> {
                         color: Colors.grey, letterSpacing: 1.5, fontSize: 12)),
                 const SizedBox(height: 10),
                 Text(
-                  "\$${(wealthState.totalPassiveIncome + simulatedMonthlyDividend).toStringAsFixed(2)} / mo",
+                  "RM ${(wealthState.totalPassiveIncome + totalMonthlyDividend).toStringAsFixed(2)} / mo",
                   style: const TextStyle(
                       fontSize: 40,
                       fontWeight: FontWeight.bold,
@@ -226,18 +226,18 @@ class _IncomeScreenState extends State<IncomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
-                        Text("Simulated Stock Dividends",
+                        Text("Stock Dividend Income",
                             style: TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 16)),
-                        Text("Based on Market-Specific Yields (KLCI/US)",
+                        Text("From your actual holdings' real dividend yields",
                             style: TextStyle(
                                 color: Colors.white70, fontSize: 12)),
                       ],
                     ),
                   ),
-                  Text("+\$${simulatedMonthlyDividend.toStringAsFixed(0)}/mo",
+                  Text("+RM ${totalMonthlyDividend.toStringAsFixed(0)}/mo",
                       style: const TextStyle(
                           color: Colors.greenAccent,
                           fontWeight: FontWeight.bold,
@@ -344,7 +344,7 @@ class _IncomeScreenState extends State<IncomeScreen> {
                           style: const TextStyle(
                               color: Colors.grey, fontSize: 11)),
                       trailing: Text(
-                          "\$${item.amount.toStringAsFixed(0)}",
+                          "RM ${item.amount.toStringAsFixed(0)}",
                           style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -442,12 +442,12 @@ class _IncomeScreenState extends State<IncomeScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('\$${total.toStringAsFixed(2)}',
+                  Text('RM ${total.toStringAsFixed(2)}',
                       style: const TextStyle(
                           color: Colors.greenAccent,
                           fontWeight: FontWeight.bold,
                           fontSize: 16)),
-                  Text('\$${perShare.toStringAsFixed(2)}/share',
+                  Text('RM ${perShare.toStringAsFixed(2)}/share',
                       style: const TextStyle(color: Colors.grey, fontSize: 10)),
                 ],
               ),

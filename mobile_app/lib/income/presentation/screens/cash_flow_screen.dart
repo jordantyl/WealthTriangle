@@ -31,10 +31,10 @@ class CashFlowScreen extends StatelessWidget {
     final totalRealizedGains =
         sells.fold<double>(0.0, (sum, t) => sum + (t.realizedPnL ?? 0.0));
 
-    final simulatedMonthlyDividend =
-        portfolio.totalSimulatedAnnualDividend / 12;
+    final monthlyDividendIncome =
+        portfolio.totalAnnualDividendIncome / 12;
     final totalMonthlyPassiveIncome =
-        wealthState.totalPassiveIncome + simulatedMonthlyDividend;
+        wealthState.totalPassiveIncome + monthlyDividendIncome;
     // Annualized, so it's on the same time basis as realized gains (which
     // accumulate from whenever the user started trading).
     final totalAnnualPassiveIncome = totalMonthlyPassiveIncome * 12;
@@ -98,19 +98,26 @@ class CashFlowScreen extends StatelessWidget {
             icon: Icons.autorenew,
             iconColor: Colors.blueAccent,
             label: 'Total Recurring Income',
-            value: '\$${totalMonthlyPassiveIncome.toStringAsFixed(2)} / mo',
+            value: 'RM ${totalMonthlyPassiveIncome.toStringAsFixed(2)} / mo',
             valueColor: Colors.blueAccent,
           ),
           const SizedBox(height: 12),
-          _buildIncomeRow(colors, 'Simulated Stock Dividends', simulatedMonthlyDividend),
+          if (monthlyDividendIncome > 0) ...[
+            Text('Stock Dividends (from your holdings)',
+                style: TextStyle(color: colors.textTertiary, fontSize: 11, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            ..._buildDividendBreakdown(colors, portfolio.dividendBreakdown),
+            const SizedBox(height: 6),
+          ],
           for (final source in wealthState.incomeSources)
             _buildIncomeRow(
               colors,
               source.name,
               source.isMonthly ? source.amount : source.amount / 12,
             ),
-          if (wealthState.incomeSources.isEmpty && simulatedMonthlyDividend == 0)
-            _emptyState(colors, 'No passive income sources yet. Add one from the Passive Income tab.'),
+          if (wealthState.incomeSources.isEmpty && monthlyDividendIncome == 0)
+            _emptyState(colors, 'No passive income sources yet. Add one from the Passive Income tab, '
+                'or buy a dividend-paying stock in Investment Lab.'),
         ],
       ),
     );
@@ -246,6 +253,43 @@ class CashFlowScreen extends StatelessWidget {
     );
   }
 
+  // Per-stock breakdown of totalAnnualDividendIncome — real trailing yield x
+  // current value per holding, not a single opaque lump sum.
+  List<Widget> _buildDividendBreakdown(AppColors colors, List<DividendBreakdownItem> breakdown) {
+    final payers = breakdown.where((item) => item.annualDividend > 0).toList()
+      ..sort((a, b) => b.annualDividend.compareTo(a.annualDividend));
+
+    if (payers.isEmpty) {
+      return [_emptyState(colors, "None of your current holdings show a dividend yield right now.")];
+    }
+
+    return payers.map((item) {
+      final monthly = item.annualDividend / 12;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: colors.surface, borderRadius: BorderRadius.circular(10), border: Border.all(color: colors.border)),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(item.ticker, style: TextStyle(color: colors.textPrimary, fontWeight: FontWeight.bold)),
+                  Text('${item.dividendYield.toStringAsFixed(2)}% trailing yield',
+                      style: TextStyle(color: colors.textTertiary, fontSize: 11)),
+                ],
+              ),
+            ),
+            Text('+${item.currency} ${monthly.toStringAsFixed(2)}/mo',
+                style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    }).toList();
+  }
+
   Widget _buildIncomeRow(AppColors colors, String name, double monthlyAmount) {
     if (monthlyAmount == 0) return const SizedBox.shrink();
     return Container(
@@ -255,7 +299,7 @@ class CashFlowScreen extends StatelessWidget {
       child: Row(
         children: [
           Expanded(child: Text(name, style: TextStyle(color: colors.textPrimary))),
-          Text('+\$${monthlyAmount.toStringAsFixed(2)}/mo',
+          Text('+RM ${monthlyAmount.toStringAsFixed(2)}/mo',
               style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
         ],
       ),

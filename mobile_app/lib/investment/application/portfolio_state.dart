@@ -51,6 +51,12 @@ class PortfolioItem {
   final double riskScore;
   final double dailyChange;
   final double currentMarketPrice;
+  // Real trailing dividend yield (%) from the backend's /api/stock (same
+  // field Stock Dashboard's Triangle Attributes shows), refreshed alongside
+  // riskScore/dailyChange/currentMarketPrice in refreshPortfolioData(). 0.0
+  // is a legitimate value for non-dividend-paying stocks, not just "not
+  // fetched yet" — no flat guessed rate is applied on top of it.
+  final double dividendYield;
 
   PortfolioItem({
     required this.ticker, required this.quantity, required this.avgPrice, required this.currency,
@@ -58,10 +64,12 @@ class PortfolioItem {
     this.riskScore = 50.0,
     this.dailyChange = 0.0,
     this.currentMarketPrice = 0.0,
+    this.dividendYield = 0.0,
   });
 
   double get totalValue => quantity * (currentMarketPrice > 0 ? currentMarketPrice : avgPrice);
   double get dailyGainLoss => totalValue * (dailyChange / 100);
+  double get annualDividendIncome => totalValue * (dividendYield / 100);
 
   Map<String, dynamic> toFirestore() => {
     'ticker': ticker,
@@ -85,6 +93,23 @@ class PortfolioItem {
   }
 }
 
+/// One holding's contribution to totalAnnualDividendIncome — feeds the
+/// dividend breakdown UI (Cash Flow Analysis) so the lump sum isn't a black
+/// box.
+class DividendBreakdownItem {
+  final String ticker;
+  final String currency;
+  final double dividendYield;
+  final double annualDividend;
+
+  const DividendBreakdownItem({
+    required this.ticker,
+    required this.currency,
+    required this.dividendYield,
+    required this.annualDividend,
+  });
+}
+
 class PendingTrade {
   final String ticker;
   final int qty;
@@ -97,17 +122,22 @@ class PortfolioState extends ChangeNotifier {
   List<PortfolioItem> _holdings = [];
   List<PortfolioItem> get holdings => _holdings;
 
-  double get totalSimulatedAnnualDividend {
-    double total = 0.0;
-    for (var item in holdings) {
-      if (item.ticker.toUpperCase().endsWith('.KL')) {
-        total += item.totalValue * 0.045;
-      } else {
-        total += item.totalValue * 0.015;
-      }
-    }
-    return total;
+  // Real per-holding trailing dividend yield x current value — no flat
+  // guessed rate. Ticker order matches `holdings` (held-first via wherever
+  // the caller sorts it, unchanged here).
+  List<DividendBreakdownItem> get dividendBreakdown {
+    return holdings
+        .map((item) => DividendBreakdownItem(
+              ticker: item.ticker,
+              currency: item.currency,
+              dividendYield: item.dividendYield,
+              annualDividend: item.annualDividendIncome,
+            ))
+        .toList();
   }
+
+  double get totalAnnualDividendIncome =>
+      holdings.fold(0.0, (total, item) => total + item.annualDividendIncome);
 
   List<Transaction> _transactions = [];
   List<Transaction> get transactions => _transactions;
@@ -190,6 +220,7 @@ class PortfolioState extends ChangeNotifier {
           riskScore: result.riskScore,
           dailyChange: result.changePercent,
           currentMarketPrice: result.price,
+          dividendYield: result.dividendYield,
         );
       } catch (e) {
         print("Failed to refresh ${item.ticker}: $e");
