@@ -39,19 +39,29 @@ class _AIChatScreenState extends State<AIChatScreen> {
     );
 
     final result = await service.processQuery(userMsg);
+    final action = result['action'] ?? 'chat';
+    final rawParams = Map<String, dynamic>.from(result['parameters'] ?? {});
 
     setState(() => _isLoading = false);
 
-    if (result['confirmation_needed'] == true) {
-      // Show confirmation dialog
+    // Mutating actions always require confirmation, regardless of what the
+    // model itself claims via confirmation_needed — that field is
+    // model-controlled and a bad/hallucinated response could set it false
+    // for a real write. mutatingAiActions is the enforced source of truth.
+    if (mutatingAiActions.contains(action)) {
+      final prepared = await service.prepareAction(action, rawParams);
+      if (prepared['error'] != null) {
+        setState(() {
+          _messages.add({'role': 'assistant', 'content': prepared['error']});
+        });
+        return;
+      }
+
       final confirmed = await _showConfirmationDialog(
-        result['message'] ?? 'Are you sure?',
+        service.describeAction(action, prepared),
       );
       if (confirmed) {
-        final response = await service.executeTool(
-          result['action'] ?? 'chat',
-          result['parameters'] ?? {},
-        );
+        final response = await service.executeTool(action, prepared);
         setState(() {
           _messages.add({'role': 'assistant', 'content': response});
         });
@@ -60,6 +70,18 @@ class _AIChatScreenState extends State<AIChatScreen> {
           _messages.add({'role': 'assistant', 'content': 'Action cancelled.'});
         });
       }
+    } else if (action != 'chat') {
+      // A real tool call that doesn't need confirmation (get_stock_data,
+      // run_backtest, get_user_triangle_health, get_portfolio_summary) —
+      // must still actually run executeTool() to fetch real data. Previously
+      // this branch only showed Gemini's own guessed `message` text and
+      // never called executeTool() at all, so every non-confirmation tool
+      // silently degraded into the AI making up an answer instead of
+      // fetching anything real.
+      final response = await service.executeTool(action, rawParams);
+      setState(() {
+        _messages.add({'role': 'assistant', 'content': response});
+      });
     } else {
       setState(() {
         _messages.add({
@@ -145,6 +167,10 @@ class _AIChatScreenState extends State<AIChatScreen> {
                   child: TextField(
                     controller: _controller,
                     style: TextStyle(color: colors.textPrimary),
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: TextInputAction.newline,
+                    keyboardType: TextInputType.multiline,
                     decoration: InputDecoration(
                       hintText: 'Ask about stocks, backtesting, or your portfolio...',
                       hintStyle: TextStyle(color: colors.textTertiary),
@@ -155,7 +181,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
                         borderSide: BorderSide(color: Colors.blueAccent),
                       ),
                     ),
-                    onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
                 const SizedBox(width: 8),

@@ -27,6 +27,10 @@ dependencies:
   google_sign_in: ^6.2.1
   candlesticks: ^3.0.1
   pdf: ^3.11.1
+  flutter_overlay_window:                    # floating assistant bubble (Android only)
+    path: packages/flutter_overlay_window     # vendored + patched, see packages/flutter_overlay_window/PATCH.md
+  speech_to_text: ^7.4.0                     # voice input for floating assistant
+  permission_handler: ^11.3.1                # mic/camera permission requests
 uuid: ^4.3.3
 
 dev_dependencies:

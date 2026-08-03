@@ -28,9 +28,23 @@ import 'event_integrate/application/event_intelligence_state.dart';
 
 import 'market_intelligence/presentation/market_intelligence_screen.dart';
 import 'event_integrate/presentation/event_calendar_screen.dart';
+import 'event_integrate/presentation/export_report_screen.dart';
 
 import 'investment/presentation/screens/time_machine_screen.dart';
 import 'user/presentation/screens/settings_screen.dart';
+import 'floating_assistant/floating_assistant_bridge.dart';
+import 'floating_assistant/overlay_main.dart' as floating_assistant_overlay;
+
+// The floating assistant bubble runs in its own Flutter engine, hosted by
+// flutter_overlay_window's Service/WindowManager window. The plugin's
+// native side launches it by looking up a top-level function named
+// "overlayMain" — but only within *this* file's library, not wherever it's
+// actually defined, so the pragma-marked function must live here and just
+// forward to the real implementation.
+@pragma('vm:entry-point')
+void overlayMain() {
+  floating_assistant_overlay.runOverlayIsolate();
+}
 
 void main() async {
   // runZonedGuarded catches async errors that happen outside Flutter's own
@@ -42,6 +56,12 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     await dotenv.load(fileName: "lib/.env");
+
+    // Android only — the floating assistant bubble uses a
+    // SYSTEM_ALERT_WINDOW overlay, which has no web/iOS equivalent.
+    if (!kIsWeb) {
+      FloatingAssistantBridge.init();
+    }
 
     // Crashlytics has no web implementation — this project currently only
     // ships Android + a web build, so gate it off there.
@@ -148,6 +168,10 @@ class WealthTriangleApp extends StatelessWidget {
               '/timemachine': (context) => const TimeMachineScreen(),
               '/papertrading': (context) => const PaperTradingScreen(),
               '/settings': (context) => const SettingsScreen(),
+              '/report': (context) => ExportReportScreen(
+                userId: FirebaseAuth.instance.currentUser?.uid ?? 'guest',
+                service: Provider.of<EventIntegrationState>(context, listen: false).api,
+                ),
             },
           );
         },

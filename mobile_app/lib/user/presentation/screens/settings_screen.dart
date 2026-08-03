@@ -3,8 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../application/theme_service.dart';
+import '../../../investment/domain/brokerage_connector.dart';
+import '../../../investment/data/demo_brokerage_connector.dart';
 import 'login_screen.dart';
 import 'forget_password_screen.dart';
+import '../../../floating_assistant/floating_assistant_launcher.dart';
 
 /// ⚙️ Fulfills report requirement 1.4:
 /// "The system shall allow the user to manage application settings
@@ -19,10 +22,70 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationsEnabled = true;
 
+  // FR 7.4: REST-ready brokerage connection point (see BrokerageConnector).
+  final BrokerageConnector _broker = DemoBrokerageConnector();
+  bool _brokerConnected = false;
+  bool _brokerConnecting = false;
+
+  bool _floatingAssistantEnabled = false;
+  bool _floatingAssistantBusy = false;
+
   @override
   void initState() {
     super.initState();
     _loadPrefs();
+    _loadFloatingAssistantState();
+  }
+
+  Future<void> _loadFloatingAssistantState() async {
+    final running = await FloatingAssistantLauncher.isRunning();
+    if (!mounted) return;
+    setState(() => _floatingAssistantEnabled = running);
+  }
+
+  Future<void> _setFloatingAssistant(bool value) async {
+    setState(() => _floatingAssistantBusy = true);
+    if (value) {
+      final started = await FloatingAssistantLauncher.requestPermissionsAndStart();
+      if (!mounted) return;
+      setState(() {
+        _floatingAssistantEnabled = started;
+        _floatingAssistantBusy = false;
+      });
+      if (!started) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Overlay, microphone, and camera permissions are all needed for the floating assistant.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } else {
+      await FloatingAssistantLauncher.stop();
+      if (!mounted) return;
+      setState(() {
+        _floatingAssistantEnabled = false;
+        _floatingAssistantBusy = false;
+      });
+    }
+  }
+
+  Future<void> _connectBroker() async {
+    setState(() => _brokerConnecting = true);
+    final ok = await _broker.connect();
+    if (!mounted) return;
+    setState(() {
+      _brokerConnected = ok;
+      _brokerConnecting = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok
+            ? 'Connected to ${_broker.brokerName}'
+            : 'Could not connect to ${_broker.brokerName}'),
+        backgroundColor: ok ? Colors.green : Colors.redAccent,
+      ),
+    );
   }
 
   Future<void> _loadPrefs() async {
@@ -102,6 +165,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Text("Earnings, dividends & trend notifications"),
               value: _notificationsEnabled,
               onChanged: _setNotifications,
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // ---------- FLOATING ASSISTANT ----------
+          _sectionLabel("FLOATING ASSISTANT"),
+          Card(
+            child: SwitchListTile(
+              secondary: _floatingAssistantBusy
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.auto_awesome, color: Colors.deepPurpleAccent),
+              title: const Text("Floating Quick-Ask Bubble"),
+              subtitle: const Text(
+                  "Ask by voice or photo over any app, without opening WealthTriangle. Android only."),
+              value: _floatingAssistantEnabled,
+              onChanged: _floatingAssistantBusy ? null : _setFloatingAssistant,
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // ---------- BROKERAGE (FR 7.4) ----------
+          _sectionLabel("BROKERAGE"),
+          Card(
+            child: ListTile(
+              leading: Icon(
+                _brokerConnected ? Icons.link : Icons.link_off,
+                color: _brokerConnected ? Colors.greenAccent : Colors.grey,
+              ),
+              title: Text(_broker.brokerName),
+              subtitle: Text(_brokerConnected
+                  ? "Connected • sandbox (paper trades only)"
+                  : "Not connected • REST-ready for a real broker later"),
+              trailing: _brokerConnecting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : TextButton(
+                      onPressed: _brokerConnected ? null : _connectBroker,
+                      child: Text(_brokerConnected ? "CONNECTED" : "CONNECT"),
+                    ),
             ),
           ),
           const SizedBox(height: 20),

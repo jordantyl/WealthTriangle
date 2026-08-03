@@ -21,7 +21,8 @@
       "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 973)",
       "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1168)",
       "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 792 1436)",
-      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 534 1729)"
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 534 1729)",
+      "Read(//c/Users/ASUS/AppData/Local/Pub/Cache/hosted/pub.dev/**)"
     ],
     "additionalDirectories": [
       "C:\\invest lab\\mobile_app"
