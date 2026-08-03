@@ -21,26 +21,31 @@ class AcademyScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text("Investor Academy")),
 
-      floatingActionButton: FloatingActionButton.extended(
-        label: const Text("Update Database"),
-        icon: const Icon(Icons.cloud_upload),
-        backgroundColor: Colors.redAccent,
-        onPressed: () async {
-          final messenger = ScaffoldMessenger.of(context);
-          messenger.showSnackBar(
-              const SnackBar(content: Text("Syncing game content...")));
-          try {
-            await Provider.of<AcademyState>(context, listen: false)
-                .seedDatabase();
-            messenger.showSnackBar(const SnackBar(
-                content: Text("✅ Database synced successfully.")));
-          } catch (e) {
-            messenger.showSnackBar(SnackBar(
-                content: Text("❌ Sync failed: $e"),
-                backgroundColor: Colors.redAccent));
-          }
-        },
-      ),
+      // Only shown once /api/admin/status confirms this user is in the
+      // backend's ADMIN_UIDS allowlist — previously showed to every user and
+      // only failed (403) after tapping it.
+      floatingActionButton: state.isAdmin
+          ? FloatingActionButton.extended(
+              label: const Text("Update Database"),
+              icon: const Icon(Icons.cloud_upload),
+              backgroundColor: Colors.redAccent,
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                messenger.showSnackBar(
+                    const SnackBar(content: Text("Syncing game content...")));
+                try {
+                  await Provider.of<AcademyState>(context, listen: false)
+                      .seedDatabase();
+                  messenger.showSnackBar(const SnackBar(
+                      content: Text("✅ Database synced successfully.")));
+                } catch (e) {
+                  messenger.showSnackBar(SnackBar(
+                      content: Text("❌ Sync failed: $e"),
+                      backgroundColor: Colors.redAccent));
+                }
+              },
+            )
+          : null,
 
       // ✅ THIS WAS THE MISSING PIECE: body + ListView wrap everything below
       body: ListView(

@@ -73,10 +73,32 @@ class AcademyState extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  // Gates AcademyScreen's "Update Database" button — was showing to every
+  // user before, only failing server-side on tap. Mirrors the backend's own
+  // _require_admin_user() check (via /api/admin/status) so the two can never
+  // drift apart; defaults to false until that check resolves.
+  bool _isAdmin = false;
+  bool get isAdmin => _isAdmin;
+
   AcademyState() {
     _loadUserData();
     fetchGameContent();
     seedLessons();
+    _checkAdminStatus();
+  }
+
+  Future<void> _checkAdminStatus() async {
+    try {
+      final baseUrl = dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+      final headers = await authedBackendHeaders();
+      final response = await http.get(Uri.parse('$baseUrl/api/admin/status'), headers: headers);
+      if (response.statusCode == 200) {
+        _isAdmin = json.decode(response.body)['isAdmin'] == true;
+        notifyListeners();
+      }
+    } catch (e) {
+      print("Error checking admin status: $e");
+    }
   }
 
   int _maxInventorySlots = 20;
@@ -795,6 +817,39 @@ class AcademyState extends ChangeNotifier {
         difficulty: 'Beginner',
         xpReward: 50,
         riskProfileMatch: 'All',
+        content: const [
+          LessonSection(
+            heading: 'Owning a piece of a company',
+            body: 'A stock is a small ownership slice of a real company. When you '
+                'buy a share of a business listed on an exchange, you own a tiny '
+                'fraction of its assets and future profits. The exchange is just '
+                'the marketplace — like Bursa Malaysia or the NYSE/Nasdaq — where '
+                'buyers and sellers agree on a price in real time.',
+          ),
+          LessonSection(
+            heading: 'Why prices move',
+            body: 'A price moves when the balance between buyers and sellers '
+                'shifts — driven by earnings reports, interest rate decisions, '
+                'company news, or simply how optimistic or fearful investors feel '
+                'that day. No single force controls it; it is the sum of millions '
+                'of individual buy/sell decisions.',
+          ),
+          LessonSection(
+            heading: 'Two markets, two currencies',
+            body: 'This app tracks both Malaysian stocks (tickers ending in .KL, '
+                'part of the KLCI, priced in RM) and US stocks (part of the '
+                'S&P 500/Nasdaq, priced in USD). They also settle differently — '
+                'Malaysian trades take T+2 (2 business days) to settle, US trades '
+                'T+1 — which the Stock Dashboard shows per ticker.',
+          ),
+          LessonSection(
+            heading: 'See it live',
+            body: 'Open the Stock Dashboard and search any ticker (try a .KL '
+                'stock and a US one back to back). You will see its live price, '
+                'RSI, MACD, and a 1-year Monte Carlo forecast — all built from '
+                'the same real market data this lesson just described.',
+          ),
+        ],
       ),
       Lesson(
         id: 'lesson_2',
@@ -803,6 +858,39 @@ class AcademyState extends ChangeNotifier {
         difficulty: 'Beginner',
         xpReward: 75,
         riskProfileMatch: 'All',
+        content: const [
+          LessonSection(
+            heading: 'Volatility is the size of the swings',
+            body: 'Volatility measures how much a price moves, not which '
+                'direction. A stock that swings 10% in a week is more volatile '
+                'than one that drifts 1% — even if both end up flat. Higher '
+                'volatility means bigger potential gains, but also bigger '
+                'potential losses.',
+          ),
+          LessonSection(
+            heading: 'How this app scores it',
+            body: 'Every simulation on the Stock Dashboard produces a Risk Score '
+                'and a Volatility label (Low/Medium/High), plus a Max Drawdown — '
+                'the worst peak-to-trough drop the stock has actually experienced '
+                'historically. A large drawdown is a concrete warning sign, not '
+                'just an abstract number.',
+          ),
+          LessonSection(
+            heading: 'RSI and MACD as momentum signals',
+            body: 'RSI (Relative Strength Index) flags when a stock looks '
+                'overbought (>70) or oversold (<30). MACD histogram shows whether '
+                'momentum is accelerating or fading. The app blends both, plus '
+                'price-vs-MA50, into a single momentum score that tags each '
+                'stock Bull, Bear, or Neutral.',
+          ),
+          LessonSection(
+            heading: 'Risk is not automatically bad',
+            body: 'A Conservative investor and an Aggressive investor can look '
+                'at the exact same volatile stock and reach opposite conclusions '
+                '— it depends on how much risk fits their goals. That trade-off '
+                'is exactly what the next lesson, the Iron Triangle, is about.',
+          ),
+        ],
       ),
       Lesson(
         id: 'lesson_3',
@@ -811,6 +899,39 @@ class AcademyState extends ChangeNotifier {
         difficulty: 'Intermediate',
         xpReward: 100,
         riskProfileMatch: 'All',
+        content: const [
+          LessonSection(
+            heading: 'Three pillars, one trade-off',
+            body: 'Return, Safety, and Liquidity form a triangle because you '
+                'cannot maximize all three at once. Push for higher Return and '
+                'you usually give up some Safety. Demand instant Liquidity and '
+                'you often accept a lower Return. Every investment sits '
+                'somewhere on this triangle, never at a perfect corner.',
+          ),
+          LessonSection(
+            heading: 'How the app scores each pillar',
+            body: 'Return comes from the Expected Price / CAGR in a simulation. '
+                'Safety is the inverse of the Risk Score (a lower risk score = '
+                'higher safety). Liquidity comes from the Liquidity label — how '
+                'easily a position can be bought or sold without moving the '
+                'price.',
+          ),
+          LessonSection(
+            heading: 'Reading the Triangle Radar chart',
+            body: 'On the Stock Dashboard, after running a simulation, scroll to '
+                'the 🔺 Triangle Radar chart — it plots Return, Safety, and '
+                'Liquidity as one shape. A lopsided triangle tells you at a '
+                'glance which pillar that stock sacrifices.',
+          ),
+          LessonSection(
+            heading: 'Your personal profile',
+            body: 'Your Conservative / Balanced / Aggressive profile (set from '
+                'your risk quiz) decides how much drawdown is acceptable. If a '
+                'simulation\'s Max Drawdown breaches your profile\'s threshold, '
+                'the app shows a red risk-mismatch warning — that is this '
+                'triangle enforcing itself in real time.',
+          ),
+        ],
       ),
       Lesson(
         id: 'lesson_4',
@@ -819,6 +940,38 @@ class AcademyState extends ChangeNotifier {
         difficulty: 'Intermediate',
         xpReward: 100,
         riskProfileMatch: 'Conservative',
+        content: const [
+          LessonSection(
+            heading: 'Capital preservation comes first',
+            body: 'Conservative investing prioritizes not losing money over '
+                'maximizing gains. That usually means favoring assets with '
+                'lower volatility and steadier income, even if the long-run '
+                'return is more modest than growth stocks.',
+          ),
+          LessonSection(
+            heading: 'Common conservative building blocks',
+            body: 'Bonds and fixed deposits offer predictable, contractual '
+                'returns. Low-risk index ETFs spread your money across many '
+                'companies, softening single-stock shocks. KLCI blue-chip '
+                'dividend stocks (banks, utilities on Bursa) add steady ~3-5% '
+                'yields with relatively lower volatility.',
+          ),
+          LessonSection(
+            heading: 'What to check on the dashboard',
+            body: 'Before buying, check three Triangle Attributes on the Stock '
+                'Dashboard: Settlement Term, Liquidity label, and Dividend '
+                'Yield. A High-liquidity, Low-volatility stock with a solid '
+                'dividend yield is the classic conservative profile.',
+          ),
+          LessonSection(
+            heading: 'Why the risk warning fires more for you',
+            body: 'Because your profile is Conservative, the app flags a risk '
+                'mismatch at a Max Drawdown beyond -20% (Balanced profiles get '
+                'more room, at -35%). That is not the app being overly '
+                'cautious — it is enforcing the exact trade-off you chose when '
+                'you set your risk profile.',
+          ),
+        ],
       ),
       Lesson(
         id: 'lesson_5',
@@ -827,6 +980,39 @@ class AcademyState extends ChangeNotifier {
         difficulty: 'Advanced',
         xpReward: 150,
         riskProfileMatch: 'Aggressive',
+        content: const [
+          LessonSection(
+            heading: 'Chasing higher Return on purpose',
+            body: 'Aggressive/growth investing deliberately accepts more '
+                'volatility and drawdown risk in exchange for higher expected '
+                'return — often in younger, faster-growing companies or sectors '
+                'still expanding market share rather than paying dividends.',
+          ),
+          LessonSection(
+            heading: 'Reading momentum like the app does',
+            body: 'The Bull/Bear/Neutral regime tag on the Stock Dashboard is '
+                'built from the same momentum score (RSI + MACD histogram + '
+                'price-vs-MA50) that feeds the Monte Carlo simulation\'s drift. '
+                'A "Bull" tag means recent momentum is pushing the simulation\'s '
+                'forecast upward, not a guarantee.',
+          ),
+          LessonSection(
+            heading: 'Know your real downside',
+            body: 'Higher return potential comes with real downside: check Max '
+                'Drawdown before committing. In Time Machine, also watch the '
+                'Liquidity Penalty / slippage cost on illiquid names — exiting a '
+                'volatile, thinly-traded position quickly can cost you more '
+                'than the sticker price suggests.',
+          ),
+          LessonSection(
+            heading: 'Conviction still needs position sizing',
+            body: 'Even with high conviction, concentrating your entire '
+                'portfolio in one volatile pick abandons the Liquidity and '
+                'Safety pillars entirely. The next lesson, Building a Balanced '
+                'Portfolio, covers how to keep growth bets from dominating '
+                'everything else you own.',
+          ),
+        ],
       ),
       Lesson(
         id: 'lesson_6',
@@ -835,6 +1021,39 @@ class AcademyState extends ChangeNotifier {
         difficulty: 'Advanced',
         xpReward: 150,
         riskProfileMatch: 'All',
+        content: const [
+          LessonSection(
+            heading: 'Diversification is risk management, not a slogan',
+            body: 'Balance does not mean owning "a bit of everything" randomly '
+                '— it means deliberately spreading Return, Safety, and '
+                'Liquidity across multiple holdings so no single stock\'s bad '
+                'week sinks your whole portfolio.',
+          ),
+          LessonSection(
+            heading: 'A practical mix worth studying',
+            body: 'A common core-satellite approach: an index ETF core (around '
+                '70%) for broad, lower-volatility growth, plus a few individual '
+                'picks (around 30%) for higher conviction. Blending KLCI '
+                'dividend payers with US growth stocks also diversifies across '
+                'currency (RM vs USD) and sector, not just company count.',
+          ),
+          LessonSection(
+            heading: 'Test allocations before committing real capital',
+            body: 'Use Time Machine to backtest how a ticker would have '
+                'performed over a real historical stretch (including a crash '
+                'year like 2020) before adding it. Comparing a few candidates '
+                'this way turns "I think this is balanced" into something you '
+                'actually measured.',
+          ),
+          LessonSection(
+            heading: 'Revisit your Triangle Health Score',
+            body: 'Your overall Triangle Health Score on the Profile/Home '
+                'screen combines Return potential, Safety, and Liquidity across '
+                'everything you hold — not just one position. Check it '
+                'periodically; a portfolio that was balanced six months ago can '
+                'drift as prices move.',
+          ),
+        ],
       ),
     ];
     notifyListeners();

@@ -1,3 +1,13 @@
+/// One reading section within a lesson — a short heading + body paragraph.
+/// LessonContentScreen pages through these before the lesson can be
+/// completed (see LearningPathScreen / LessonContentScreen).
+class LessonSection {
+  final String heading;
+  final String body;
+
+  const LessonSection({required this.heading, required this.body});
+}
+
 class Lesson {
   final String id;
   final String title;
@@ -5,6 +15,7 @@ class Lesson {
   final String difficulty; // 'Beginner', 'Intermediate', 'Advanced'
   final int xpReward;
   final String riskProfileMatch; // 'Conservative', 'Balanced', 'Aggressive', 'All'
+  final List<LessonSection> content;
 
   Lesson({
     required this.id,
@@ -13,6 +24,7 @@ class Lesson {
     required this.difficulty,
     required this.xpReward,
     required this.riskProfileMatch,
+    this.content = const [],
   });
 
   Map<String, dynamic> toJson() => {

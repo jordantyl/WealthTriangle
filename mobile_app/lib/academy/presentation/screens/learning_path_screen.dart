@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../application/academy_state.dart';
-import '../../domain/lesson.dart';
 import '../../../shared/app_theme_colors.dart';
+import 'lesson_content_screen.dart';
 
 class LearningPathScreen extends StatefulWidget {
   const LearningPathScreen({super.key});
@@ -12,17 +12,6 @@ class LearningPathScreen extends StatefulWidget {
 }
 
 class _LearningPathScreenState extends State<LearningPathScreen> {
-  Future<void> _markCompleted(Lesson lesson) async {
-    final state = Provider.of<AcademyState>(context, listen: false);
-    await state.completeLesson(lesson);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('✅ Lesson Completed! +${lesson.xpReward} XP'),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -103,16 +92,17 @@ class _LearningPathScreenState extends State<LearningPathScreen> {
                         ),
                       ],
                     ),
-                    trailing: isCompleted
-                        ? const Icon(Icons.check_circle, color: Colors.green)
-                        : ElevatedButton(
-                            onPressed: () => _markCompleted(lesson),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blueAccent,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            ),
-                            child: const Text('Start'),
-                          ),
+                    trailing: ElevatedButton(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => LessonContentScreen(lesson: lesson)),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isCompleted ? Colors.green : Colors.blueAccent,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      ),
+                      child: Text(isCompleted ? 'Review' : 'Start'),
+                    ),
                   ),
                 );
               },
