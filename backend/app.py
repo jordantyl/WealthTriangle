@@ -5,12 +5,26 @@ import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import yfinance as yf
-from algorithms import run_monte_carlo, calculate_historical_backtest, run_time_machine
+from algorithms import (
+    run_monte_carlo,
+    calculate_historical_backtest,
+    run_time_machine,
+    calculate_momentum_score,
+)
+
+# Loads backend/.env into the process environment if the file exists (local
+# dev). Keys set directly in the OS/shell environment (e.g. on Render) still
+# win — load_dotenv() never overwrites an already-set variable, so this is
+# safe to call unconditionally in both places. This is what makes keys
+# survive a terminal restart: previously they only lived in that shell's
+# `set VAR=...`, which is gone the moment the window closes.
+load_dotenv()
 
 # Windows consoles default to the legacy cp1252 codepage unless the user has
 # opted into UTF-8 system-wide, which crashes any print() containing an emoji
@@ -333,6 +347,13 @@ def news_proxy():
                     "thumbnail": {"resolutions": [{"url": thumb_url}]} if thumb_url else {},
                     "providerPublishTime": content.get('pubDate', ''),
                     "summary": content.get('summary', ''),
+                    # Which queried ticker surfaced this article. Since tickers
+                    # are queried in caller-supplied order and dedup keeps only
+                    # the first hit, callers that put held/portfolio tickers
+                    # first (see /api/calendar_events's same convention) get
+                    # those as the related_ticker on any article both a held
+                    # and a merely-watchlisted ticker would have surfaced.
+                    "related_ticker": ticker,
                 })
         except Exception as e:
             print(f"News fetch error for {ticker}: {e}")
@@ -500,6 +521,109 @@ def summarize_proxy():
 
 
 # =====================================================================
+# BATCH SENTIMENT CLASSIFICATION — classifies a whole news feed (up to 20
+# articles) in ONE AI call instead of one call per article. /api/summarize
+# is rate-limited to 10/minute per user, which a per-article auto-classify
+# loop over a 15-20 article feed would blow through immediately; batching
+# keeps this to a single call per feed load/refresh. Sentiment-only (no
+# summary/triangle_hint text) — tapping into a single article for the full
+# breakdown still goes through /api/summarize as before.
+# POST /api/classify_news   body: {"articles": [{"id","title","text"}, ...]}
+# =====================================================================
+_CLASSIFY_SYSTEM_PROMPT = (
+    "You are a financial news classifier for a beginner investing app. "
+    "For each article below, classify its market sentiment as exactly one "
+    'of: "Bullish", "Bearish", or "Neutral". Respond with ONLY a valid JSON '
+    'array, no other text, one entry per article in the same order: '
+    '[{"id": "<id>", "sentiment": "<Bullish|Bearish|Neutral>"}, ...]'
+)
+
+
+def _classify_user_prompt(articles):
+    blocks = []
+    for a in articles:
+        snippet = (a.get('text') or '')[:200]
+        blocks.append(f"id: {a.get('id', '')}\ntitle: {a.get('title', '')}\nsnippet: {snippet}")
+    return "\n\n".join(blocks)
+
+
+def _parse_classify_json(content):
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    parsed = json.loads(content.strip())
+    if not isinstance(parsed, list):
+        raise ValueError("expected a JSON array of {id, sentiment}")
+    return parsed
+
+
+def _try_gemini_classify(articles):
+    prompt = _CLASSIFY_SYSTEM_PROMPT + "\n\n" + _classify_user_prompt(articles)
+    # Same lite model as _try_gemini_summarize — fast, no thinking-token
+    # overhead, and this call path is even more latency-sensitive since it
+    # blocks the whole feed's initial render.
+    content = _try_gemini(prompt, model="gemini-flash-lite-latest")
+    return _parse_classify_json(content)
+
+
+def _try_openai_classify(articles):
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+        },
+        json={
+            "model": "gpt-3.5-turbo",
+            "max_tokens": 800,
+            "messages": [
+                {"role": "system", "content": _CLASSIFY_SYSTEM_PROMPT},
+                {"role": "user", "content": _classify_user_prompt(articles)},
+            ],
+        },
+        timeout=25,
+    )
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"]
+    return _parse_classify_json(content)
+
+
+@app.route('/api/classify_news', methods=['POST'])
+@limiter.limit("10 per minute")
+def classify_news_proxy():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    articles = (payload.get('articles') or [])[:20]  # same cap as /api/news
+    if not articles:
+        return jsonify({"results": []})
+
+    if GEMINI_API_KEY:
+        try:
+            return jsonify({"results": _try_gemini_classify(articles)})
+        except Exception as e:
+            print(f"Classify Proxy Error (Gemini): {e}")
+            if not OPENAI_API_KEY:
+                return jsonify({"error": "AI classification is temporarily unavailable."}), 502
+
+    if OPENAI_API_KEY:
+        try:
+            return jsonify({"results": _try_openai_classify(articles)})
+        except Exception as e:
+            print(f"Classify Proxy Error (OpenAI): {e}")
+            return jsonify({"error": "AI classification is temporarily unavailable."}), 502
+
+    return jsonify({
+        "error": "AI classification isn't configured. Set GEMINI_API_KEY or "
+                  "OPENAI_API_KEY in the backend environment."
+    }), 502
+
+
+# =====================================================================
 # AI ASSISTANT PROXY — phone -> Flask -> Ollama (if running locally),
 # falling back to OpenAI (reusing OPENAI_API_KEY, same as /api/summarize)
 # if Ollama isn't reachable. Previously this only tried Ollama, so the
@@ -541,15 +665,76 @@ def _try_openai_assistant(prompt):
 
 
 def _try_gemini(prompt, model="gemini-flash-latest"):
+    # 30s used to cut it close: gemini-flash-latest (used by /api/assistant,
+    # not the lite model used for summarization) measured 6-9s typical but
+    # hit the old 30s limit outright on a slower attempt during live testing.
+    # The mobile client already allows 60s total for /api/assistant
+    # (ai_assistant_service.dart), so there's room to give Gemini more time
+    # here without the client giving up first.
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         headers={"Content-Type": "application/json"},
         params={"key": GEMINI_API_KEY},
         json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=30,
+        timeout=55,
     )
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def _try_gemini_vision(prompt, image_base64, mime_type, model="gemini-flash-latest"):
+    # Same endpoint/model as _try_gemini, but with an inline_data image part
+    # alongside the text part — this is Gemini's multimodal input shape.
+    # Ollama (llama3.2, text-only) and the gpt-3.5-turbo fallback can't do
+    # vision, so the floating assistant's camera input only ever goes
+    # through Gemini; there's no fallback chain here like /api/assistant.
+    r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={"Content-Type": "application/json"},
+        params={"key": GEMINI_API_KEY},
+        json={"contents": [{"parts": [
+            {"text": prompt},
+            {"inline_data": {"mime_type": mime_type, "data": image_base64}},
+        ]}]},
+        timeout=55,
+    )
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+# =====================================================================
+# FLOATING ASSISTANT VISION PROXY — phone (overlay) -> Flask -> Gemini.
+# Same auth/rate-limit posture as /api/assistant. Gemini-only (no Ollama/
+# OpenAI fallback) since this needs real vision support.
+# POST /api/assistant/vision   body: {"prompt": "...", "image_base64": "...", "mime_type": "image/jpeg"}
+# =====================================================================
+@app.route('/api/assistant/vision', methods=['POST'])
+@limiter.limit("10 per minute")
+def assistant_vision_proxy():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    image_base64 = payload.get('image_base64', '')
+    prompt = payload.get('prompt') or "What is in this image?"
+    mime_type = payload.get('mime_type', 'image/jpeg')
+    if not image_base64:
+        return jsonify({"error": "image_base64 required"}), 400
+
+    if not GEMINI_API_KEY:
+        return jsonify({
+            "error": "Image analysis isn't configured. Set GEMINI_API_KEY in "
+                     "the backend environment."
+        }), 502
+
+    try:
+        return jsonify({"response": _try_gemini_vision(prompt, image_base64, mime_type)})
+    except Exception as e:
+        print(f"Assistant Vision Error (Gemini): {e}")
+        return jsonify({
+            "error": "AI assistant is temporarily unavailable. Please try again."
+        }), 502
 
 
 @app.route('/api/assistant', methods=['POST'])
@@ -693,6 +878,19 @@ def get_stock_data():
         else:
             reasons.append("Below MA50")
 
+        # Momentum-adjusted Monte Carlo (report title/abstract): blend RSI,
+        # MACD histogram and price-vs-MA50 into one signed score, then feed
+        # it into the simulation's drift instead of only using it for the
+        # display text below.
+        momentum_score = calculate_momentum_score(rsi_val, macd_data["histogram"], current_price, ma50)
+        if momentum_score > 0.15:
+            market_regime = "Bull"
+        elif momentum_score < -0.15:
+            market_regime = "Bear"
+        else:
+            market_regime = "Neutral"
+        reasons.append(f"Momentum {momentum_score:+.2f} ({market_regime})")
+
         ai_reason = f"{', '.join(reasons)}. Daily: {change_percent:.2f}%."
 
         years_to_simulate = 1
@@ -700,7 +898,7 @@ def get_stock_data():
             years_to_simulate = 3
         if period == '5y':
             years_to_simulate = 5
-        sim_results = run_monte_carlo(ticker, df, years=years_to_simulate)
+        sim_results = run_monte_carlo(ticker, df, years=years_to_simulate, momentum_score=momentum_score)
 
         currency_val = "USD"
         if ticker.endswith(".KL"):
@@ -740,7 +938,9 @@ def get_stock_data():
             "max_drawdown": historical.get("maximum_drawdown", 0),
             "cagr": historical.get("historical_cagr", 0),
             "dividend_yield": round(dividend_yield, 2),
-            "settlement_term": "T+2" if ticker.endswith(".KL") else "T+1"
+            "settlement_term": "T+2" if ticker.endswith(".KL") else "T+1",
+            "momentum_score": sim_results.get("momentum_score", momentum_score),
+            "market_regime": market_regime
         })
 
     except Exception as e:
@@ -791,6 +991,20 @@ def admin_seed():
         seeded += 1
 
     return jsonify({"seeded_collections": seeded})
+
+
+# =====================================================================
+# ADMIN STATUS CHECK — lets the client know whether to show admin-only UI
+# (the Academy screen's "Update Database" button) instead of showing it to
+# every user and only failing on tap. Runs the exact same _require_admin_user()
+# gate /api/admin/seed itself enforces, so the two can never drift apart —
+# this is read-only and reveals nothing beyond a yes/no.
+# GET /api/admin/status
+# =====================================================================
+@app.route('/api/admin/status', methods=['GET'])
+def admin_status():
+    auth_error = _require_admin_user()
+    return jsonify({"isAdmin": auth_error is None})
 
 
 if __name__ == '__main__':

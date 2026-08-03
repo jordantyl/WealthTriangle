@@ -1,11 +1,62 @@
 import numpy as np
 import pandas as pd
 
-def run_monte_carlo(ticker, history_df, years=1, simulations=100):
+
+def _fill_market_holiday_gaps(history_df):
     """
-    Predicts future price movement based on past volatility.
-    (Unchanged from your original version.)
+    Report 3.1.2 pre-processing step: handle missing values such as market
+    holidays. yfinance silently drops non-trading sessions, so a public
+    holiday that falls on a weekday looks identical to a normal trading gap.
+    Reindexing to a full business-day calendar and forward-filling the
+    close/volume makes those gaps explicit instead of letting pct_change()
+    quietly skip over them.
+
+    No-op for frames that aren't date-indexed (e.g. unit-test fixtures),
+    so callers can always run data through this unconditionally.
     """
+    if not isinstance(history_df.index, pd.DatetimeIndex) or len(history_df) < 2:
+        return history_df
+
+    full_range = pd.date_range(history_df.index.min(), history_df.index.max(), freq='B')
+    filled = history_df.reindex(full_range)
+    filled['Close'] = filled['Close'].ffill()
+    if 'Volume' in filled.columns:
+        filled['Volume'] = filled['Volume'].fillna(0)
+    return filled.dropna(subset=['Close'])
+
+
+def calculate_momentum_score(rsi_val, macd_histogram, current_price, ma50):
+    """
+    Blends the three technical indicators the report's abstract promises
+    ("momentum-adjusted ... calibrated using real-time technical indicators
+    (SMA, RSI)") into a single signed score in [-1, 1]:
+      - RSI distance from the neutral 50 line
+      - MACD histogram sign/magnitude, scaled relative to price
+      - price's percentage distance from its 50-day moving average
+    """
+    rsi_component = (rsi_val - 50.0) / 50.0
+
+    macd_component = 0.0
+    if current_price:
+        macd_component = (macd_histogram / current_price) * 50.0
+
+    ma_component = 0.0
+    if ma50:
+        ma_component = (current_price - ma50) / ma50
+
+    score = (rsi_component + macd_component + ma_component) / 3.0
+    return float(np.clip(score, -1.0, 1.0))
+
+
+def run_monte_carlo(ticker, history_df, years=1, simulations=100, momentum_score=0.0):
+    """
+    Momentum-adjusted geometric Brownian motion: the base drift/stdev come
+    from historical log returns, then the daily drift is nudged by
+    `momentum_score` (see calculate_momentum_score) scaled to a fraction of
+    the stock's own daily volatility, so the nudge stays proportionate
+    across low- and high-volatility tickers instead of using a fixed shift.
+    """
+    history_df = _fill_market_holiday_gaps(history_df)
     daily_returns = history_df['Close'].pct_change().dropna()
 
     log_returns = np.log(1 + daily_returns)
@@ -14,10 +65,14 @@ def run_monte_carlo(ticker, history_df, years=1, simulations=100):
     drift = u - (0.5 * var)
     stdev = log_returns.std()
 
+    momentum_score = float(np.clip(momentum_score, -1.0, 1.0))
+    momentum_weight = 0.5  # caps the nudge at +/- 0.5 stdev/day
+    drift_adjusted = drift + (momentum_weight * momentum_score * stdev)
+
     days_to_predict = years * 252
     last_price = history_df['Close'].iloc[-1]
 
-    daily_shocks = np.random.normal(drift, stdev, (days_to_predict, simulations))
+    daily_shocks = np.random.normal(drift_adjusted, stdev, (days_to_predict, simulations))
 
     price_paths = np.zeros_like(daily_shocks)
     price_paths[0] = last_price
@@ -37,7 +92,9 @@ def run_monte_carlo(ticker, history_df, years=1, simulations=100):
         "expected_price_1y": round(expected_price, 2),
         "worst_case_1y": round(worst_case, 2),
         "best_case_1y": round(best_case, 2),
-        "risk_score_volatility": round(risk_score, 2)
+        "risk_score_volatility": round(risk_score, 2),
+        "momentum_score": round(momentum_score, 3),
+        "momentum_adjusted": True
     }
 
 
@@ -49,6 +106,7 @@ def calculate_historical_backtest(history_df):
     if len(history_df) < 2:
         return {"historical_cagr": 0.0, "maximum_drawdown": 0.0}
 
+    history_df = _fill_market_holiday_gaps(history_df)
     prices = history_df['Close']
 
     beginning_value = prices.iloc[0]
@@ -91,6 +149,7 @@ def run_time_machine(history_df, initial_capital=10000.0):
     if len(history_df) < 2:
         return {"error": "Not enough data in the selected date range."}
 
+    history_df = _fill_market_holiday_gaps(history_df)
     prices = history_df['Close']
     volumes = history_df.get('Volume')
 

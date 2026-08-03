@@ -25,3 +25,4 @@ backend/*serviceAccountKey*.json
 
 # Misc
 repomix-output.xml
+backend/*.log

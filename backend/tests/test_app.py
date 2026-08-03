@@ -145,6 +145,98 @@ class TestParseSummaryJson:
         assert "Return" in result["triangle_hint"]
 
 
+class TestClassifyNewsFallback:
+    def test_empty_articles_short_circuits_without_any_ai_call(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-key")
+        called = []
+        monkeypatch.setattr(app_module, "_try_gemini_classify", lambda a: called.append(a))
+        r = client.post("/api/classify_news", json={"articles": []})
+        assert r.status_code == 200
+        assert r.get_json() == {"results": []}
+        assert called == []
+
+    def test_no_keys_configured_returns_clear_error(self, client):
+        r = client.post("/api/classify_news", json={"articles": [{"id": "1", "title": "t"}]})
+        assert r.status_code == 502
+        assert "GEMINI_API_KEY" in r.get_json()["error"]
+
+    def test_prefers_gemini_when_both_keys_present(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        monkeypatch.setattr(app_module, "OPENAI_API_KEY", "fake-openai")
+        monkeypatch.setattr(
+            app_module, "_try_gemini_classify",
+            lambda articles: [{"id": "1", "sentiment": "Bullish"}],
+        )
+        openai_called = []
+        monkeypatch.setattr(app_module, "_try_openai_classify", lambda a: openai_called.append(a))
+
+        r = client.post("/api/classify_news", json={"articles": [{"id": "1", "title": "Stocks rally"}]})
+        assert r.status_code == 200
+        assert r.get_json()["results"] == [{"id": "1", "sentiment": "Bullish"}]
+        assert openai_called == []
+
+    def test_falls_back_to_openai_when_gemini_fails(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        monkeypatch.setattr(app_module, "OPENAI_API_KEY", "fake-openai")
+
+        def broken_gemini(articles):
+            raise RuntimeError("quota exceeded")
+
+        monkeypatch.setattr(app_module, "_try_gemini_classify", broken_gemini)
+        monkeypatch.setattr(
+            app_module, "_try_openai_classify",
+            lambda articles: [{"id": "1", "sentiment": "Bearish"}],
+        )
+
+        r = client.post("/api/classify_news", json={"articles": [{"id": "1", "title": "Stocks fall"}]})
+        assert r.status_code == 200
+        assert r.get_json()["results"] == [{"id": "1", "sentiment": "Bearish"}]
+
+    def test_returns_502_when_gemini_fails_and_no_openai_key(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+
+        def broken_gemini(articles):
+            raise RuntimeError("quota exceeded")
+
+        monkeypatch.setattr(app_module, "_try_gemini_classify", broken_gemini)
+
+        r = client.post("/api/classify_news", json={"articles": [{"id": "1", "title": "t"}]})
+        assert r.status_code == 502
+
+    def test_caps_batch_at_twenty_articles(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        received = []
+
+        def fake_classify(articles):
+            received.extend(articles)
+            return [{"id": a["id"], "sentiment": "Neutral"} for a in articles]
+
+        monkeypatch.setattr(app_module, "_try_gemini_classify", fake_classify)
+        articles = [{"id": str(i), "title": f"t{i}"} for i in range(30)]
+
+        r = client.post("/api/classify_news", json={"articles": articles})
+        assert r.status_code == 200
+        assert len(received) == 20
+
+
+class TestParseClassifyJson:
+    def test_parses_plain_json_array(self):
+        result = app_module._parse_classify_json(
+            '[{"id": "1", "sentiment": "Bullish"}, {"id": "2", "sentiment": "Bearish"}]'
+        )
+        assert result == [{"id": "1", "sentiment": "Bullish"}, {"id": "2", "sentiment": "Bearish"}]
+
+    def test_strips_markdown_json_fence(self):
+        result = app_module._parse_classify_json(
+            '```json\n[{"id": "1", "sentiment": "Neutral"}]\n```'
+        )
+        assert result == [{"id": "1", "sentiment": "Neutral"}]
+
+    def test_non_list_json_raises(self):
+        with pytest.raises(ValueError):
+            app_module._parse_classify_json('{"id": "1", "sentiment": "Neutral"}')
+
+
 class TestAssistantFallback:
     def test_missing_prompt_is_400(self, client):
         r = client.post("/api/assistant", json={})
@@ -172,6 +264,72 @@ class TestAssistantFallback:
         r = client.post("/api/assistant", json={"prompt": "hello"})
         assert r.status_code == 502
         assert "GEMINI_API_KEY" in r.get_json()["error"]
+
+
+class TestAssistantVision:
+    def test_missing_image_is_400(self, client):
+        r = client.post("/api/assistant/vision", json={"prompt": "what is this?"})
+        assert r.status_code == 400
+
+    def test_no_gemini_key_gives_actionable_error(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", None)
+        r = client.post("/api/assistant/vision", json={"image_base64": "Zm9v"})
+        assert r.status_code == 502
+        assert "GEMINI_API_KEY" in r.get_json()["error"]
+
+    def test_sends_image_and_prompt_to_gemini(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        captured = {}
+
+        def fake_vision(prompt, image_base64, mime_type, model="gemini-flash-latest"):
+            captured["prompt"] = prompt
+            captured["image_base64"] = image_base64
+            captured["mime_type"] = mime_type
+            return "it's a chart"
+
+        monkeypatch.setattr(app_module, "_try_gemini_vision", fake_vision)
+        r = client.post("/api/assistant/vision", json={
+            "prompt": "what's in this chart?",
+            "image_base64": "Zm9v",
+            "mime_type": "image/png",
+        })
+        assert r.status_code == 200
+        assert r.get_json()["response"] == "it's a chart"
+        assert captured == {
+            "prompt": "what's in this chart?",
+            "image_base64": "Zm9v",
+            "mime_type": "image/png",
+        }
+
+    def test_defaults_prompt_and_mime_type_when_omitted(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+        captured = {}
+
+        def fake_vision(prompt, image_base64, mime_type, model="gemini-flash-latest"):
+            captured["prompt"] = prompt
+            captured["mime_type"] = mime_type
+            return "ok"
+
+        monkeypatch.setattr(app_module, "_try_gemini_vision", fake_vision)
+        r = client.post("/api/assistant/vision", json={"image_base64": "Zm9v"})
+        assert r.status_code == 200
+        assert captured["prompt"] == "What is in this image?"
+        assert captured["mime_type"] == "image/jpeg"
+
+    def test_gemini_error_gives_502(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
+
+        def broken_vision(prompt, image_base64, mime_type, model="gemini-flash-latest"):
+            raise ConnectionError("gemini down")
+
+        monkeypatch.setattr(app_module, "_try_gemini_vision", broken_vision)
+        r = client.post("/api/assistant/vision", json={"image_base64": "Zm9v"})
+        assert r.status_code == 502
+
+    def test_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.post("/api/assistant/vision", json={"image_base64": "Zm9v"})
+        assert r.status_code == 401
 
 
 class TestFirebaseAuthGate:
@@ -356,3 +514,48 @@ class TestAdminSeed:
             headers={"X-API-Key": "secret123"},
         )
         assert r.status_code == 503
+
+
+class TestAdminStatus:
+    """Covers /api/admin/status, which AcademyScreen uses to hide the
+    'Update Database' button from non-admins instead of showing it to
+    everyone and only failing on tap. Must track _require_admin_user() (the
+    same gate /api/admin/seed enforces) exactly, so these mirror
+    TestAdminSeed's scenarios one-for-one."""
+
+    def test_true_when_firebase_admin_not_configured(self, client):
+        # _firestore_admin is None by default (reset_keys fixture) — matches
+        # _require_admin_user()'s own dev-machine fallback.
+        r = client.get("/api/admin/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"isAdmin": True}
+
+    def test_false_without_a_valid_token(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.get("/api/admin/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"isAdmin": False}
+
+    def test_false_for_a_valid_but_non_admin_user(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
+        r = client.get("/api/admin/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"isAdmin": False}
+
+    def test_false_when_admin_uids_not_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", set())
+        r = client.get("/api/admin/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"isAdmin": False}
+
+    def test_true_for_an_actual_admin(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
+        r = client.get("/api/admin/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"isAdmin": True}
