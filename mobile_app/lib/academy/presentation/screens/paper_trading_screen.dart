@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:candlesticks/candlesticks.dart' as pkg;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -12,6 +14,12 @@ import '../../domain/paper_trading/synthetic_asset.dart';
 /// turn-based Market Tycoon / Merchant Master games. Genuine paper trading:
 /// real candlestick charts building up live, random news headlines nudging
 /// price, and a buy/sell UI against a real portfolio/P&L.
+///
+/// Portfolio state (cash, positions, trade log) persists to
+/// users/{uid}/paper_trading/state — same Firestore layout convention as
+/// AcademyState's users/{uid}/academy/stats. Price/candle history is NOT
+/// persisted — the simulator picks price back up live from a fresh start()
+/// each session, only cash/positions/trades survive a re-open.
 class PaperTradingScreen extends StatefulWidget {
   const PaperTradingScreen({super.key});
 
@@ -19,24 +27,66 @@ class PaperTradingScreen extends StatefulWidget {
   State<PaperTradingScreen> createState() => _PaperTradingScreenState();
 }
 
-class _PaperTradingScreenState extends State<PaperTradingScreen> {
+class _PaperTradingScreenState extends State<PaperTradingScreen>
+    with WidgetsBindingObserver {
   static const _bullColor = Colors.greenAccent;
   static const _bearColor = Colors.redAccent;
+  // Autosave cadence while the market ticks, as a safety net alongside the
+  // explicit save-on-buy/sell and save-on-backgrounding triggers below.
+  static const _autosaveEveryTicks = 20;
 
   late final PaperTradingEngine _engine;
   late final Timer _timer;
   late String _selectedAssetId;
   final TextEditingController _qtyController = TextEditingController(text: '1');
+  int _ticksSinceSave = 0;
+  bool _isRestoring = true;
 
   final _priceFormat = NumberFormat.simpleCurrency(name: 'USD', decimalDigits: 2);
   final _cashFormat = NumberFormat.simpleCurrency(name: 'USD', decimalDigits: 2);
 
+  DocumentReference<Map<String, dynamic>>? get _stateDoc {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return null;
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('paper_trading')
+        .doc('state');
+  }
+
+  Future<void> _restoreState() async {
+    try {
+      final doc = await _stateDoc?.get();
+      if (doc != null && doc.exists) {
+        _engine.restoreFrom(doc.data()!);
+      }
+    } catch (e) {
+      debugPrint('Failed to restore paper trading state: $e');
+    } finally {
+      if (mounted) setState(() => _isRestoring = false);
+    }
+  }
+
+  Future<void> _saveState() async {
+    try {
+      await _stateDoc?.set({
+        ..._engine.toJson(),
+        'savedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Failed to save paper trading state: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _engine = PaperTradingEngine();
     _engine.start();
     _selectedAssetId = syntheticAssets.first.id;
+    _restoreState();
     // Same Timer.periodic + setState lifecycle pattern as
     // flash_trader_screen.dart — local to this screen, cancelled on
     // dispose, so the engine only runs while this screen is open.
@@ -45,12 +95,28 @@ class _PaperTradingScreenState extends State<PaperTradingScreen> {
       _engine.tick();
       _engine.maybeInjectNews();
       setState(() {});
+      _ticksSinceSave++;
+      if (_ticksSinceSave >= _autosaveEveryTicks) {
+        _ticksSinceSave = 0;
+        _saveState();
+      }
     });
+  }
+
+  // Covers "exit the application" — dispose() only fires when this screen
+  // is popped, not when the app is backgrounded/killed while still on it.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      _saveState();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer.cancel();
+    _saveState();
     _qtyController.dispose();
     super.dispose();
   }
@@ -86,6 +152,7 @@ class _PaperTradingScreenState extends State<PaperTradingScreen> {
     } else {
       _showSnack('Bought ${qty.toStringAsFixed(qty == qty.roundToDouble() ? 0 : 2)} '
           '${_selectedAsset.ticker}.');
+      _saveState();
     }
   }
 
@@ -101,6 +168,7 @@ class _PaperTradingScreenState extends State<PaperTradingScreen> {
     } else {
       _showSnack('Sold ${qty.toStringAsFixed(qty == qty.roundToDouble() ? 0 : 2)} '
           '${_selectedAsset.ticker}.');
+      _saveState();
     }
   }
 
@@ -121,6 +189,19 @@ class _PaperTradingScreenState extends State<PaperTradingScreen> {
         title: const Text('📈 Paper Trading'),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
+        actions: [
+          if (_isRestoring)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                ),
+              ),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),

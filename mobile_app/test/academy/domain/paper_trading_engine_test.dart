@@ -247,4 +247,71 @@ void main() {
       expect(engine.totalPnl, closeTo(engine.totalPortfolioValue - PaperTradingEngine.startingCash, 0.001));
     });
   });
+
+  group('toJson() / restoreFrom() persistence round-trip', () {
+    test('restoring onto a freshly-started engine reproduces cash, positions and trade log', () {
+      final original = startedEngine();
+      original.buy('aqua', 10);
+      original.tick();
+      original.buy('nova', 3);
+      original.tick();
+      original.sell('aqua', 4);
+      final saved = original.toJson();
+
+      // A brand-new session: different seed, fresh start() (different
+      // prices/candles) — only portfolio state should carry over.
+      final restored = startedEngine(99);
+      restored.restoreFrom(saved);
+
+      expect(restored.cash, closeTo(original.cash, 0.001));
+      expect(restored.positions.keys, original.positions.keys);
+      for (final assetId in original.positions.keys) {
+        expect(restored.positions[assetId]!.quantity,
+            closeTo(original.positions[assetId]!.quantity, 0.001));
+        expect(restored.positions[assetId]!.avgCost,
+            closeTo(original.positions[assetId]!.avgCost, 0.001));
+      }
+      expect(restored.tradeLog.length, original.tradeLog.length);
+      for (var i = 0; i < original.tradeLog.length; i++) {
+        expect(restored.tradeLog[i].assetId, original.tradeLog[i].assetId);
+        expect(restored.tradeLog[i].type, original.tradeLog[i].type);
+        expect(restored.tradeLog[i].quantity, closeTo(original.tradeLog[i].quantity, 0.001));
+        expect(restored.tradeLog[i].price, closeTo(original.tradeLog[i].price, 0.001));
+      }
+    });
+
+    test('restoreFrom does not touch price/candle history', () {
+      final original = startedEngine();
+      original.buy('aqua', 5);
+      final saved = original.toJson();
+
+      final restored = startedEngine(123);
+      final priceBeforeRestore = restored.currentPrice('aqua');
+      final candleCountBeforeRestore = restored.candlesFor('aqua').length;
+      restored.restoreFrom(saved);
+
+      expect(restored.currentPrice('aqua'), priceBeforeRestore);
+      expect(restored.candlesFor('aqua').length, candleCountBeforeRestore);
+    });
+
+    test('persisted trade log is capped at maxPersistedTradeLog entries', () {
+      final engine = startedEngine();
+      // Buy/sell one share repeatedly to generate more trades than the cap.
+      for (var i = 0; i < PaperTradingEngine.maxPersistedTradeLog + 10; i++) {
+        engine.buy('aqua', 1);
+        engine.sell('aqua', 1);
+      }
+      final saved = engine.toJson();
+      final tradeLog = saved['tradeLog'] as List;
+      expect(tradeLog.length, PaperTradingEngine.maxPersistedTradeLog);
+    });
+
+    test('restoring from an empty/missing state leaves the engine at defaults', () {
+      final engine = startedEngine();
+      engine.restoreFrom({});
+      expect(engine.cash, PaperTradingEngine.startingCash);
+      expect(engine.positions, isEmpty);
+      expect(engine.tradeLog, isEmpty);
+    });
+  });
 }

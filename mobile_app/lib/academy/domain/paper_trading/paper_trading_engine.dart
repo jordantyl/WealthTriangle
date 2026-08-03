@@ -32,7 +32,38 @@ class PaperTradingEngine {
   final List<SimTransaction> tradeLog = [];
   final List<FiredNewsHeadline> recentNews = [];
 
+  // Cap on how many trade log entries get persisted (see toJson) — the
+  // in-memory tradeLog itself stays unbounded so the on-screen history is
+  // never truncated by save/restore.
+  static const int maxPersistedTradeLog = 50;
+
   PaperTradingEngine({Random? random}) : _random = random ?? Random();
+
+  /// Portfolio state only (cash, positions, a capped trade log) — not price
+  /// history/candles, which regenerate fresh from start() on every session.
+  Map<String, dynamic> toJson() => {
+    'cash': cash,
+    'positions': positions.values.map((p) => p.toJson()).toList(),
+    'tradeLog': tradeLog.take(maxPersistedTradeLog).map((t) => t.toJson()).toList(),
+  };
+
+  /// Applies previously-saved portfolio state on top of a fresh start().
+  /// Price/candle history is intentionally NOT restored — the simulator
+  /// picks back up live from wherever start() re-seeded prices.
+  void restoreFrom(Map<String, dynamic> json) {
+    cash = (json['cash'] as num?)?.toDouble() ?? startingCash;
+
+    positions.clear();
+    final rawPositions = json['positions'] as List<dynamic>? ?? [];
+    for (final raw in rawPositions) {
+      final position = SimPosition.fromJson(raw as Map<String, dynamic>);
+      positions[position.assetId] = position;
+    }
+
+    tradeLog.clear();
+    final rawTrades = json['tradeLog'] as List<dynamic>? ?? [];
+    tradeLog.addAll(rawTrades.map((raw) => SimTransaction.fromJson(raw as Map<String, dynamic>)));
+  }
 
   double currentPrice(String assetId) => _currentPrice[assetId] ?? 0;
 
