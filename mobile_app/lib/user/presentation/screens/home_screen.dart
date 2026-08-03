@@ -38,10 +38,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final academyState = Provider.of<AcademyState>(context);
 
     // Calculate real passive income
-    double simulatedMonthlyDividend =
-        portfolio.totalSimulatedAnnualDividend / 12;
+    double monthlyDividendIncome =
+        portfolio.totalAnnualDividendIncome / 12;
     double totalMonthlyIncome =
-        wealthState.totalPassiveIncome + simulatedMonthlyDividend;
+        wealthState.totalPassiveIncome + monthlyDividendIncome;
 
     return Scaffold(
       appBar: AppBar(
@@ -178,37 +178,18 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             const SizedBox(height: 20),
+            // Replaces the old "Monthly Brief" dialog (income/expenses/savings
+            // as read-only text you could only close) — the Performance
+            // Report's Financial Situation section covers the same ground
+            // plus the Iron Triangle, holdings, and Academy progress, and is
+            // actually shareable/exportable instead of a dead-end dialog.
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  showDialog(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      backgroundColor: const Color(0xFF1E1E2C),
-                      title: const Text("Monthly Brief", style: TextStyle(color: Colors.white)),
-                      content: SingleChildScrollView(
-                        child: Text(
-                          wealthState.generateMonthlyBrief(),
-                          style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.8),
-                        ),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text("CLOSE"),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.description),
-                label: const Text("View Monthly Brief"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueAccent,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-              ),
+              child: _buildModuleCard(context,
+                  title: "📊 Performance Report",
+                  icon: Icons.description,
+                  color: Colors.blueAccent,
+                  route: '/report'),
             ),
 
             const SizedBox(height: 40),
@@ -285,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildMiniStat(
                   context, "Profile", academy.riskProfile, Colors.orangeAccent),
               _buildMiniStat(context, "Passive",
-                  "\$${totalIncome.toStringAsFixed(0)}", Colors.blueAccent),
+                  "RM ${totalIncome.toStringAsFixed(0)}", Colors.blueAccent),
             ],
           ),
           const SizedBox(height: 20),
@@ -322,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const Text("Goal Progress",
                     style: TextStyle(color: Colors.grey, fontSize: 12)),
                 Text(
-                  "${(state.goalProgress * 100).toStringAsFixed(0)}% of \$${state.financialGoal!.toStringAsFixed(0)}",
+                  "${(state.goalProgress * 100).toStringAsFixed(0)}% of RM ${state.financialGoal!.toStringAsFixed(0)}",
                   style: const TextStyle(
                       color: Colors.blueAccent,
                       fontWeight: FontWeight.bold,

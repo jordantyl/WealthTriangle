@@ -25,7 +25,7 @@ class ProfileScreen extends StatelessWidget {
           style: const TextStyle(color: Colors.white),
           autofocus: true,
           decoration: InputDecoration(
-            prefixText: "\$ ",
+            prefixText: "RM ",
             prefixStyle: const TextStyle(color: Colors.white),
             labelText: "Enter Amount",
             labelStyle: const TextStyle(color: Colors.grey),
@@ -121,19 +121,19 @@ class ProfileScreen extends StatelessWidget {
 
             _buildActionTile(
               context, icon: Icons.attach_money, title: "Monthly Salary",
-              value: "\$${wealthState.monthlySalary.toStringAsFixed(0)}",
+              value: "RM ${wealthState.monthlySalary.toStringAsFixed(0)}",
               onTap: () => _showEditDialog(context, "Salary", wealthState.monthlySalary, wealthState.updateSalary),
             ),
 
             _buildActionTile(
               context, icon: Icons.shopping_cart, title: "Monthly Expenses",
-              value: "\$${wealthState.monthlyExpenses.toStringAsFixed(0)}",
+              value: "RM ${wealthState.monthlyExpenses.toStringAsFixed(0)}",
               onTap: () => _showEditDialog(context, "Expenses", wealthState.monthlyExpenses, wealthState.updateExpenses),
             ),
 
             _buildActionTile(
               context, icon: Icons.account_balance_wallet, title: "Current Savings",
-              value: "\$${wealthState.currentSavings.toStringAsFixed(0)}",
+              value: "RM ${wealthState.currentSavings.toStringAsFixed(0)}",
               onTap: () => _showEditDialog(context, "Savings", wealthState.currentSavings, wealthState.updateSavings),
             ),
 
@@ -194,7 +194,7 @@ class ProfileScreen extends StatelessWidget {
                       const Text("Target Savings Goal", style: TextStyle(fontWeight: FontWeight.bold)),
                       Text(
                         wealthState.financialGoal != null
-                            ? "\$${wealthState.financialGoal!.toStringAsFixed(0)}"
+                            ? "RM ${wealthState.financialGoal!.toStringAsFixed(0)}"
                             : "Not set",
                         style: TextStyle(
                           color: wealthState.financialGoal != null ? Colors.greenAccent : Colors.grey,
@@ -396,7 +396,7 @@ class ProfileScreen extends StatelessWidget {
               keyboardType: TextInputType.number,
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
-                prefixText: "\$ ",
+                prefixText: "RM ",
                 prefixStyle: TextStyle(color: Colors.white),
                 labelText: "Target Amount",
                 labelStyle: TextStyle(color: Colors.grey),

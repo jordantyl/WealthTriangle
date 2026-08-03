@@ -90,9 +90,9 @@ class WealthState extends ChangeNotifier {
     // 1. Safety Factor (Emergency Fund)
     double safetyFactor = safetyScore; 
     
-    // 2. Return Potential (Simulated Dividends / Income)
+    // 2. Return Potential (Dividend Income)
     // Assuming a healthy passive income goal is $10,000/year
-    double returnFactor = (_portfolioState.totalSimulatedAnnualDividend / 10000.0 * 100).clamp(0, 100);
+    double returnFactor = (_portfolioState.totalAnnualDividendIncome / 10000.0 * 100).clamp(0, 100);
 
     // 3. Liquidity Factor (Cash vs Expenses)
     double liquidityFactor = (_monthlyExpenses > 0) 
@@ -139,18 +139,30 @@ class WealthState extends ChangeNotifier {
   /// Balances emergency fund against expenses AND portfolio risk.
   double get safetyScore {
     if (!hasFinancialData) return 0.0;
-    if (_monthlyExpenses == 0) return 100.0;
 
-    // 1. Emergency Fund Score (50%)
-    double survivalMonths = _currentSavings / _monthlyExpenses;
-    double emergencyFundScore = (survivalMonths / 6.0).clamp(0.0, 1.0) * 50;
+    // 1. Emergency Fund Score (50%) — months of expenses your savings could
+    // cover, capped at 6 months. With no expenses there's no burn rate to
+    // measure against, so this half instead rewards actually holding a cash
+    // buffer, rather than defaulting to a flat 50 regardless of savings —
+    // that's what let this hit 100 with $0 savings and $0 everything else.
+    double emergencyFundScore;
+    if (_monthlyExpenses > 0) {
+      double survivalMonths = _currentSavings / _monthlyExpenses;
+      emergencyFundScore = (survivalMonths / 6.0).clamp(0.0, 1.0) * 50;
+    } else {
+      emergencyFundScore = _currentSavings > 0 ? 50.0 : 0.0;
+    }
 
-    // 2. Portfolio Risk Score (50%)
-    double portfolioValue = _portfolioState.holdings.fold(0, (sum, item) => sum + item.totalValue);
-    // Lower ratio of savings-to-portfolio is riskier
-    double riskRatio = (portfolioValue > 0) ? _currentSavings / portfolioValue : 1.0;
-    double portfolioRiskScore = (riskRatio / 0.5).clamp(0.0, 1.0) * 50; // Assumes a healthy ratio is 50% cash
-    
+    // 2. Portfolio Risk Score (50%) — what fraction of total assets (cash +
+    // invested) is sitting in cash; a healthy cushion is ~50% cash. Having
+    // NO assets at all (no savings, no portfolio) is the riskiest position,
+    // not the safest, so that case scores 0 instead of defaulting to a flat
+    // "fully safe" whenever there's simply no portfolio yet.
+    double portfolioValue = _portfolioState.holdings.fold(0.0, (sum, item) => sum + item.totalValue);
+    double totalAssets = _currentSavings + portfolioValue;
+    double cashRatio = totalAssets > 0 ? _currentSavings / totalAssets : 0.0;
+    double portfolioRiskScore = (cashRatio / 0.5).clamp(0.0, 1.0) * 50;
+
     return (emergencyFundScore + portfolioRiskScore).clamp(0.0, 100.0);
   }
 
@@ -169,7 +181,7 @@ class WealthState extends ChangeNotifier {
     double totalIncome = _monthlySalary + totalPassiveIncome;
     if (totalIncome == 0) return 0;
 
-    double totalDividends = _portfolioState.totalSimulatedAnnualDividend;
+    double totalDividends = _portfolioState.totalAnnualDividendIncome;
     double totalReturns = (totalPassiveIncome * 12) + totalDividends;
 
     double returnRatio = totalReturns / (totalIncome * 12); // Ratio of returns to total salary
@@ -329,34 +341,5 @@ class WealthState extends ChangeNotifier {
   double get goalProgress {
     if (_financialGoal == null || _financialGoal == 0) return 0;
     return (_currentSavings / _financialGoal!).clamp(0.0, 1.0);
-  }
-
-  String generateMonthlyBrief() {
-    double monthlyIncome = _monthlySalary + totalPassiveIncome;
-    double savingsMonths = _monthlyExpenses > 0 ? _currentSavings / _monthlyExpenses : 0;
-    
-    String brief = "";
-    brief += "📊 Monthly Financial Brief\n";
-    brief += "━━━━━━━━━━━━━━━━━━━━━\n";
-    brief += "Income: \$${monthlyIncome.toStringAsFixed(0)}/mo\n";
-    brief += "Expenses: \$${_monthlyExpenses.toStringAsFixed(0)}/mo\n";
-    brief += "Savings: \$${_currentSavings.toStringAsFixed(0)}\n";
-    brief += "Safety Score: ${safetyScore.toStringAsFixed(0)}/100\n\n";
-    
-    if (savingsMonths >= 6) {
-      brief += "✅ Your emergency fund covers ${savingsMonths.toStringAsFixed(1)} months (Good).\n";
-    } else if (savingsMonths >= 3) {
-      brief += "⚠️ Your emergency fund covers ${savingsMonths.toStringAsFixed(1)} months. Aim for 6 months.\n";
-    } else {
-      brief += "🔴 Your emergency fund is low. Please prioritize building 3-6 months of expenses.\n";
-    }
-
-    if (totalPassiveIncome > 0) {
-      brief += "✅ You have passive income of \$${totalPassiveIncome.toStringAsFixed(0)}/mo. Keep growing this!\n";
-    } else {
-      brief += "💡 You have no passive income yet. Consider investing in dividend stocks or bonds.\n";
-    }
-
-    return brief;
   }
 }
