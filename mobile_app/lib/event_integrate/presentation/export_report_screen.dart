@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import '../data/event_integration_api.dart';
 import '../../shared/app_theme_colors.dart';
+import '../../user/application/wealth_state.dart';
+import '../../investment/application/portfolio_state.dart';
+import '../../academy/application/academy_state.dart';
 
 class ExportReportScreen extends StatefulWidget {
   final String userId;
@@ -123,15 +127,29 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
     );
   }
 
+  // CSV stays a flat table of simulation runs (mixed-schema data doesn't fit
+  // a single CSV cleanly). PDF is the full "Financial Triangle" report —
+  // Iron Triangle scores, financial situation, holdings, and Academy
+  // progress, in addition to the same simulation history.
+  static const _csvItems = [
+    ('📈', 'All Time Machine simulation runs'),
+    ('⚠️', 'Max Drawdown & CAGR metrics'),
+    ('💧', 'Liquidity penalty records'),
+    ('📅', 'Simulation date ranges'),
+    ('💰', 'Initial vs. final virtual capital'),
+  ];
+
+  static const _pdfItems = [
+    ('🔺', 'Your Iron Triangle scores (Return/Safety/Liquidity)'),
+    ('💵', 'Financial situation (income, expenses, savings)'),
+    ('📊', 'Your current stock holdings & dividend income'),
+    ('📚', 'Academy learning progress (level, XP, lessons)'),
+    ('⏳', 'All Time Machine simulation runs'),
+  ];
+
   List<Widget> _buildIncludedItems() {
     final colors = context.appColors;
-    const items = [
-      ('📈', 'All Time Machine simulation runs'),
-      ('⚠️', 'Max Drawdown & CAGR metrics'),
-      ('💧', 'Liquidity penalty records'),
-      ('📅', 'Simulation date ranges'),
-      ('💰', 'Initial vs. final virtual capital'),
-    ];
+    final items = _exportFormat == 'PDF' ? _pdfItems : _csvItems;
 
     return items
         .map((item) => Padding(
@@ -293,6 +311,19 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
   }
 
   Future<void> _exportReport() async {
+    // Read everything context-dependent up front, before any `await` below
+    // crosses an async gap — Provider.of/context must not be touched after
+    // that.
+    final isPdf = _exportFormat == 'PDF';
+    WealthState? wealthState;
+    PortfolioState? portfolio;
+    AcademyState? academy;
+    if (isPdf) {
+      wealthState = Provider.of<WealthState>(context, listen: false);
+      portfolio = Provider.of<PortfolioState>(context, listen: false);
+      academy = Provider.of<AcademyState>(context, listen: false);
+    }
+
     setState(() => _isExporting = true);
 
     try {
@@ -300,8 +331,44 @@ class _ExportReportScreenState extends State<ExportReportScreen> {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final File file;
 
-      if (_exportFormat == 'PDF') {
-        final bytes = await widget.service.exportSimulationAsPDF(widget.userId);
+      if (isPdf) {
+        final totalMonthlyPassiveIncome =
+            wealthState!.totalPassiveIncome + (portfolio!.totalAnnualDividendIncome / 12);
+
+        final holdings = portfolio.holdings
+            .map((h) => {
+                  'ticker': h.ticker,
+                  'quantity': h.quantity,
+                  'value': h.totalValue,
+                  'dividendYield': h.dividendYield,
+                  'annualDividend': h.annualDividendIncome,
+                  'currency': h.currency,
+                })
+            .toList();
+
+        final completedLessonTitles = academy!.allLessons
+            .where((l) => academy!.completedLessonIds.contains(l.id))
+            .map((l) => l.title)
+            .toList();
+
+        final bytes = await widget.service.exportFullReportAsPDF(
+          widget.userId,
+          triangleHealthScore: wealthState.triangleHealthScore,
+          returnScore: wealthState.returnScore,
+          safetyScore: wealthState.safetyScore,
+          liquidityScore: wealthState.liquidityScore,
+          trianglePreference: wealthState.trianglePreference.name,
+          investorType: portfolio.investorType,
+          monthlySalary: wealthState.monthlySalary,
+          monthlyExpenses: wealthState.monthlyExpenses,
+          currentSavings: wealthState.currentSavings,
+          totalMonthlyPassiveIncome: totalMonthlyPassiveIncome,
+          holdings: holdings,
+          academyLevel: academy.level,
+          academyXp: academy.xp,
+          totalLessons: academy.allLessons.length,
+          completedLessonTitles: completedLessonTitles,
+        );
         file = File('${dir.path}/WealthTriangle_Report_$timestamp.pdf');
         await file.writeAsBytes(bytes);
       } else {

@@ -288,6 +288,191 @@ class EventIntegrationService {
     return doc.save();
   }
 
+  /// The full "Financial Triangle" report — everything exportSimulationAsPDF
+  /// covers, plus the app's core teaching framework applied to this specific
+  /// user: their Return/Safety/Liquidity standing, financial situation,
+  /// current holdings, and how far their Academy learning has progressed.
+  /// Callers gather the non-Firestore-history data from live Provider state
+  /// (WealthState/PortfolioState/AcademyState) since this service has no
+  /// BuildContext of its own — see ExportReportScreen._exportReport().
+  Future<Uint8List> exportFullReportAsPDF(
+    String userId, {
+    required double triangleHealthScore,
+    required double returnScore,
+    required double safetyScore,
+    required double liquidityScore,
+    required String trianglePreference,
+    required String investorType,
+    required double monthlySalary,
+    required double monthlyExpenses,
+    required double currentSavings,
+    required double totalMonthlyPassiveIncome,
+    required List<Map<String, dynamic>> holdings,
+    required int academyLevel,
+    required int academyXp,
+    required int totalLessons,
+    required List<String> completedLessonTitles,
+  }) async {
+    final rows = await fetchSimulationHistoryForExport(userId);
+    final doc = pw.Document();
+
+    // Which pillar currently dominates — same "read the triangle" framing
+    // Lesson 3 (Learning Path) teaches: you can't maximize all three, so
+    // name the current trade-off in plain language instead of just numbers.
+    final scores = {'Return': returnScore, 'Safety': safetyScore, 'Liquidity': liquidityScore};
+    final strongest = scores.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    final weakest = scores.entries.reduce((a, b) => a.value <= b.value ? a : b);
+    final triangleNote = strongest.key == weakest.key
+        ? 'Your three pillars are evenly balanced.'
+        : 'Right now you lean toward ${strongest.key}, at the cost of ${weakest.key.toLowerCase()}.';
+
+    final savingsRate = monthlySalary > 0
+        ? ((monthlySalary - monthlyExpenses) / monthlySalary * 100).clamp(-999, 100)
+        : 0.0;
+
+    pw.Widget sectionHeader(String title) => pw.Padding(
+          padding: const pw.EdgeInsets.only(top: 18, bottom: 8),
+          child: pw.Text(title,
+              style: pw.TextStyle(
+                  fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.blue800)),
+        );
+
+    pw.Widget statRow(String label, String value) => pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 2),
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(label, style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+              pw.Text(value, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+            ],
+          ),
+        );
+
+    final simHeaders = [
+      'Date', 'Ticker', 'Start', 'End', 'Initial (\$)', 'Final (\$)',
+      'CAGR (%)', 'Max DD (%)', 'Liquidity', 'Slippage (%)',
+    ];
+    final simData = rows.map((r) {
+      final dateStr = (r['date'] as String).isNotEmpty
+          ? (r['date'] as String).split('T').first
+          : '-';
+      return [
+        dateStr, '${r['ticker']}', '${r['startDate']}', '${r['endDate']}',
+        '${r['initialCapital']}', '${r['finalCapital']}', '${r['cagr']}',
+        '${r['maxDrawdown']}', '${r['liquidityLabel']}', '${r['slippagePct']}',
+      ];
+    }).toList();
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        header: (context) => context.pageNumber == 1
+            ? pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text('WealthTriangle — Your Financial Triangle Report',
+                      style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'WealthTriangle is built around one idea: you cannot maximize Return, '
+                    'Safety, and Liquidity all at once — every financial decision trades one '
+                    'for another. This report shows where you currently stand on that '
+                    'triangle, and how far your knowledge has grown.',
+                    style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+                  ),
+                  pw.SizedBox(height: 2),
+                  pw.Text('Generated ${DateTime.now().toIso8601String().split('T').first}',
+                      style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+                  pw.Divider(),
+                ],
+              )
+            : pw.SizedBox(),
+        build: (context) => [
+          sectionHeader('🔺 Your Iron Triangle'),
+          statRow('Overall Triangle Health Score', '${triangleHealthScore.toStringAsFixed(0)}/100'),
+          statRow('Return', '${returnScore.toStringAsFixed(0)}/100'),
+          statRow('Safety', '${safetyScore.toStringAsFixed(0)}/100'),
+          statRow('Liquidity', '${liquidityScore.toStringAsFixed(0)}/100'),
+          statRow('Your Stated Preference', trianglePreference),
+          statRow('Investor Type', investorType),
+          pw.SizedBox(height: 6),
+          pw.Text(triangleNote, style: pw.TextStyle(fontSize: 10, fontStyle: pw.FontStyle.italic)),
+
+          sectionHeader('💰 Financial Situation'),
+          statRow('Monthly Salary', 'RM ${monthlySalary.toStringAsFixed(2)}'),
+          statRow('Monthly Expenses', 'RM ${monthlyExpenses.toStringAsFixed(2)}'),
+          statRow('Monthly Savings Rate', '${savingsRate.toStringAsFixed(1)}%'),
+          statRow('Current Savings', 'RM ${currentSavings.toStringAsFixed(2)}'),
+          statRow('Total Monthly Passive Income', 'RM ${totalMonthlyPassiveIncome.toStringAsFixed(2)}'),
+
+          sectionHeader('📈 Your Holdings'),
+          if (holdings.isEmpty)
+            pw.Text('No holdings yet.', style: const pw.TextStyle(fontSize: 10))
+          else
+            pw.TableHelper.fromTextArray(
+              headers: const ['Ticker', 'Qty', 'Value', 'Dividend Yield', 'Annual Dividend'],
+              data: holdings
+                  .map((h) => [
+                        '${h['ticker']}',
+                        '${h['quantity']}',
+                        '${h['currency']} ${(h['value'] as num).toStringAsFixed(2)}',
+                        '${(h['dividendYield'] as num).toStringAsFixed(2)}%',
+                        '${h['currency']} ${(h['annualDividend'] as num).toStringAsFixed(2)}',
+                      ])
+                  .toList(),
+              headerStyle: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold, fontSize: 9, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue800),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              cellAlignment: pw.Alignment.centerLeft,
+              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+            ),
+
+          sectionHeader('📚 Learning Progress'),
+          statRow('Academy Level', '$academyLevel'),
+          statRow('Total XP', '$academyXp'),
+          statRow('Lessons Completed', '${completedLessonTitles.length} / $totalLessons'),
+          pw.SizedBox(height: 6),
+          if (completedLessonTitles.isEmpty)
+            pw.Text('No lessons completed yet.', style: const pw.TextStyle(fontSize: 10))
+          else
+            ...completedLessonTitles.map((title) => pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 2),
+                  child: pw.Text('• $title', style: const pw.TextStyle(fontSize: 10)),
+                )),
+
+          sectionHeader('⏳ Simulation History'),
+          if (simData.isEmpty)
+            pw.Text('No simulation history found for this account.',
+                style: const pw.TextStyle(fontSize: 10))
+          else
+            pw.TableHelper.fromTextArray(
+              headers: simHeaders,
+              data: simData,
+              headerStyle: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold, fontSize: 9, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue800),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              cellAlignment: pw.Alignment.centerLeft,
+              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+            ),
+        ],
+        footer: (context) => pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text(
+            'Page ${context.pageNumber} of ${context.pagesCount}',
+            style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+          ),
+        ),
+      ),
+    );
+
+    return doc.save();
+  }
+
   List<EconomicEvent> _getMockEvents(List<String> tickers) {
     final now = DateTime.now();
     return [
