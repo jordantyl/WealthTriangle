@@ -151,6 +151,15 @@ class _HomeScreenState extends State<HomeScreen> {
             SizedBox(
               width: double.infinity,
               child: _buildModuleCard(context,
+                  title: "⭐ Watchlist",
+                  icon: Icons.star,
+                  color: Colors.yellowAccent,
+                  route: '/watchlist'),
+            ),
+            const SizedBox(height: 15),
+            SizedBox(
+              width: double.infinity,
+              child: _buildModuleCard(context,
                   title: "⏳ Time Machine",
                   icon: Icons.history_toggle_off,
                   color: Colors.amberAccent,

@@ -47,8 +47,15 @@ class WealthState extends ChangeNotifier {
   double get currentSavings => _currentSavings;
   double get riskTolerance => _riskTolerance;
   List<IncomeSource> get incomeSources => _incomeSources;
-  List<String> _watchlist = ['AAPL', 'MSFT', 'TSLA', 'GOOGL'];
+
+  // The starter tickers every new user sees. Kept structurally protected —
+  // see updateWatchlist below — so neither a manual edit nor the AI
+  // assistant's remove_from_watchlist tool can ever drop them, only add on
+  // top of them.
+  static const List<String> defaultWatchlist = ['AAPL', 'MSFT', 'TSLA', 'GOOGL'];
+  List<String> _watchlist = List<String>.from(defaultWatchlist);
   List<String> get watchlist => _watchlist;
+  bool isDefaultTicker(String ticker) => defaultWatchlist.contains(ticker.toUpperCase());
   TrianglePreference get trianglePreference => _trianglePreference;
 
   double? get financialGoal => _financialGoal;
@@ -229,10 +236,33 @@ class WealthState extends ChangeNotifier {
     }
   }
 
+  /// Replaces the watchlist wholesale, but the default starter tickers
+  /// (defaultWatchlist) are always unioned back in — this is the single
+  /// write path every caller (manual edits, AI assistant tools) goes
+  /// through, so it's the one place that needs to enforce "defaults can
+  /// never be removed" rather than trusting every call site to remember.
   Future<void> updateWatchlist(List<String> newList) async {
-    _watchlist = newList;
+    final upper = newList.map((t) => t.toUpperCase()).toSet();
+    _watchlist = [...defaultWatchlist, ...upper.difference(defaultWatchlist.toSet())];
     await _pushToCloud(); // Already saves to Firestore
     notifyListeners();
+  }
+
+  Future<void> addToWatchlist(String ticker) async {
+    final t = ticker.toUpperCase();
+    if (_watchlist.contains(t)) return;
+    await updateWatchlist([..._watchlist, t]);
+  }
+
+  /// Throws [WatchlistProtectedException] for a default ticker instead of
+  /// silently no-op'ing, so both the manual-edit screen and the AI
+  /// assistant can surface a clear "can't remove that" message.
+  Future<void> removeFromWatchlist(String ticker) async {
+    final t = ticker.toUpperCase();
+    if (defaultWatchlist.contains(t)) {
+      throw WatchlistProtectedException(t);
+    }
+    await updateWatchlist(_watchlist.where((x) => x != t).toList());
   }
 
   // ✅ FIXED: Loads income sources from Firestore
@@ -342,4 +372,12 @@ class WealthState extends ChangeNotifier {
     if (_financialGoal == null || _financialGoal == 0) return 0;
     return (_currentSavings / _financialGoal!).clamp(0.0, 1.0);
   }
+}
+
+class WatchlistProtectedException implements Exception {
+  final String ticker;
+  const WatchlistProtectedException(this.ticker);
+
+  @override
+  String toString() => '$ticker is a default watchlist ticker and cannot be removed.';
 }

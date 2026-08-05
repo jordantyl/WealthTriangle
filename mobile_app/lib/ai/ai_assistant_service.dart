@@ -230,7 +230,19 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
                 rawTicker.toUpperCase().contains(t.toUpperCase()),
           );
           if (existing.isNotEmpty) {
-            prepared['ticker'] = existing.first;
+            final match = existing.first;
+            // Default starter tickers are off-limits to the AI assistant
+            // too — reject here, before a confirmation dialog is even
+            // offered, rather than letting WealthState's write silently
+            // no-op after the user already confirmed.
+            if (wealthState.isDefaultTicker(match)) {
+              return {
+                ...prepared,
+                'error': '$match is one of your default watchlist tickers and can\'t be removed — '
+                    'only tickers you added yourself can be removed.',
+              };
+            }
+            prepared['ticker'] = match;
             break;
           }
         }
@@ -419,10 +431,14 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
 
   Future<String> _removeFromWatchlist(String ticker) async {
     if (ticker.isEmpty) return "No ticker given.";
-    final current = List<String>.from(wealthState.watchlist);
-    current.removeWhere((t) => t.toUpperCase() == ticker.toUpperCase());
-    await wealthState.updateWatchlist(current);
-    return "Removed $ticker from your watchlist.";
+    try {
+      await wealthState.removeFromWatchlist(ticker);
+      return "Removed $ticker from your watchlist.";
+    } on WatchlistProtectedException catch (e) {
+      // prepareAction already filters this out before confirmation, but
+      // this stays as a hard backstop against the write itself.
+      return e.toString();
+    }
   }
 
   Future<String> _runBacktest(String ticker) async {
@@ -436,13 +452,7 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
   }
 
   Future<String> _addToWatchlist(String ticker) async {
-    // ✅ IMPROVED: actually persists via WealthState (was a fake success
-    // message before).
-    final current = List<String>.from(wealthState.watchlist);
-    if (!current.contains(ticker.toUpperCase())) {
-      current.add(ticker.toUpperCase());
-      await wealthState.updateWatchlist(current);
-    }
+    await wealthState.addToWatchlist(ticker);
     return "Successfully added $ticker to your watchlist. Keep an eye on its Liquidity and Volatility!";
   }
 

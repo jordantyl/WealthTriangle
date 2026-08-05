@@ -32,6 +32,7 @@ import 'event_integrate/presentation/export_report_screen.dart';
 
 import 'investment/presentation/screens/time_machine_screen.dart';
 import 'user/presentation/screens/settings_screen.dart';
+import 'user/presentation/screens/watchlist_screen.dart';
 import 'floating_assistant/floating_assistant_bridge.dart';
 import 'floating_assistant/overlay_main.dart' as floating_assistant_overlay;
 
@@ -166,6 +167,7 @@ class WealthTriangleApp extends StatelessWidget {
                 watchlistTickers:Provider.of<WealthState>(context, listen: false).watchlist,
                 ),
               '/timemachine': (context) => const TimeMachineScreen(),
+              '/watchlist': (context) => const WatchlistScreen(),
               '/papertrading': (context) => const PaperTradingScreen(),
               '/settings': (context) => const SettingsScreen(),
               '/report': (context) => ExportReportScreen(
