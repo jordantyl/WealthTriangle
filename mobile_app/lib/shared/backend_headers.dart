@@ -1,5 +1,13 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+/// Default Flask backend URL when BACKEND_BASE_URL isn't set in .env.
+/// 10.0.2.2 is the Android emulator's alias for the host machine's
+/// localhost — meaningless in a browser, where the web admin app (and any
+/// desktop/web target) needs the real loopback address instead.
+String get defaultBackendBaseUrl =>
+    kIsWeb ? 'http://localhost:5000' : 'http://10.0.2.2:5000';
 
 /// Header sent with every call to our Flask backend. The backend checks
 /// this against its own BACKEND_API_KEY env var (see app.py's

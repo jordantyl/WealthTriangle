@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -87,9 +88,17 @@ class AcademyState extends ChangeNotifier {
     _checkAdminStatus();
   }
 
+  /// Public re-check, for callers (e.g. the web admin app) constructed
+  /// before Firebase Auth resolves the signed-in user — the constructor's
+  /// own _checkAdminStatus() call would otherwise run with no ID token yet
+  /// and never automatically retry once login completes.
+  Future<void> refreshAdminStatus() => _checkAdminStatus();
+
   Future<void> _checkAdminStatus() async {
     try {
-      final baseUrl = dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+      final baseUrl = kIsWeb
+          ? defaultBackendBaseUrl
+          : (dotenv.env['BACKEND_BASE_URL'] ?? defaultBackendBaseUrl);
       final headers = await authedBackendHeaders();
       final response = await http.get(Uri.parse('$baseUrl/api/admin/status'), headers: headers);
       if (response.statusCode == 200) {
@@ -433,7 +442,11 @@ class AcademyState extends ChangeNotifier {
   // forever. Upserting is safe here because nothing else writes to these
   // collections and the IDs are stable.
   // ==========================================
-  Future<void> seedDatabase() async {
+  /// [only] restricts the push to a subset of collection names (e.g. just
+  /// 'academy_quizzes') instead of overwriting all five at once — lets the
+  /// admin panel push one piece of content at a time. Omit for the original
+  /// "seed everything" behavior.
+  Future<void> seedDatabase({Set<String>? only}) async {
     final Map<String, Map<String, dynamic>> collections = {};
 
     // ---- academy_scenarios (from scenario_data.dart, doc ID = scn id) ----
@@ -565,12 +578,19 @@ class AcademyState extends ChangeNotifier {
       };
     }
 
-    final baseUrl = dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+    final scopedCollections = only == null
+        ? collections
+        : (Map<String, Map<String, dynamic>>.from(collections)
+          ..removeWhere((key, _) => !only.contains(key)));
+
+    final baseUrl = kIsWeb
+        ? defaultBackendBaseUrl
+        : (dotenv.env['BACKEND_BASE_URL'] ?? defaultBackendBaseUrl);
     final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
     final response = await http.post(
       Uri.parse('$baseUrl/api/admin/seed'),
       headers: headers,
-      body: json.encode({'collections': collections}),
+      body: json.encode({'collections': scopedCollections}),
     );
     if (response.statusCode != 200) {
       throw Exception('Seed failed (${response.statusCode}): ${response.body}');
