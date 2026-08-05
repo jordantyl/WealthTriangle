@@ -12,11 +12,16 @@ class EventIntegrationState extends ChangeNotifier {
   Set<String> _alertedEventIds = {};
   bool _isLoading = false;
   EventType? _selectedFilter;
+  bool _heldOnly = false;
   bool _isMockEvents = false;
 
   List<EconomicEvent> get events => _events;
   bool get isLoading => _isLoading;
   EventType? get selectedFilter => _selectedFilter;
+  // "Held" = the event's ticker is one the user actually owns (e.isHeld,
+  // set from heldTickers in loadData below) — the market filter requested
+  // alongside the existing event-type filter above.
+  bool get heldOnly => _heldOnly;
   // True when the stock-specific events (earnings/dividends) are fallback
   // demo content rather than real Yahoo data — user-created liquidity
   // events are always real regardless of this flag.
@@ -24,6 +29,7 @@ class EventIntegrationState extends ChangeNotifier {
 
   List<EconomicEvent> get filteredEvents {
     var list = _events.where((e) => e.isUpcoming).toList();
+    if (_heldOnly) list = list.where((e) => e.isHeld).toList();
     if (_selectedFilter != null) {
       list = list.where((e) => e.type == _selectedFilter).toList();
     }
@@ -129,6 +135,11 @@ class EventIntegrationState extends ChangeNotifier {
 
   void setFilter(EventType? filter) {
     _selectedFilter = filter;
+    notifyListeners();
+  }
+
+  void setHeldOnly(bool value) {
+    _heldOnly = value;
     notifyListeners();
   }
 

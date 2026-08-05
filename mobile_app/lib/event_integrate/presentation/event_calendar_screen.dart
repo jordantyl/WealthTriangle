@@ -124,6 +124,7 @@ class _EventCalendarScreenState extends State<EventCalendarScreen>
     return Column(
       children: [
         if (state.isMockEvents) _buildDemoDataBanner(),
+        _buildHeldOnlyToggle(state),
         _buildEventTypeFilter(state),
         _buildCountdownBanner(state),
         Expanded(
@@ -239,6 +240,38 @@ class _EventCalendarScreenState extends State<EventCalendarScreen>
           Text(DateFormat('MMM d').format(next.eventDate),
               style: TextStyle(color: typeColor, fontWeight: FontWeight.bold, fontSize: 13)),
         ],
+      ),
+    );
+  }
+
+  // The "market filter" — narrows events down to tickers the user actually
+  // holds (event.isHeld), alongside the existing event-type filter. The
+  // isHeld data already fed the 📌 Held badge on event cards; this is the
+  // first place it's exposed as an actual filter toggle.
+  Widget _buildHeldOnlyToggle(EventIntegrationState state) {
+    final colors = context.appColors;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: GestureDetector(
+        onTap: () => state.setHeldOnly(!state.heldOnly),
+        child: Row(
+          children: [
+            Icon(
+              state.heldOnly ? Icons.check_box : Icons.check_box_outline_blank,
+              size: 18,
+              color: state.heldOnly ? const Color(0xFFFFA726) : colors.textTertiary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Held tickers only',
+              style: TextStyle(
+                color: state.heldOnly ? const Color(0xFFFFA726) : colors.textSecondary,
+                fontSize: 13,
+                fontWeight: state.heldOnly ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

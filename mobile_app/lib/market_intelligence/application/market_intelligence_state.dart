@@ -9,12 +9,18 @@ class MarketIntelligenceState extends ChangeNotifier {
   List<NewsArticle> _articles = [];
   bool _isLoading = false;
   String _filterSentiment = 'All';
+  bool _heldOnly = false;
   bool _isMockNews = false;
 
   // Getters for the UI to read
   List<NewsArticle> get articles => _articles;
   bool get isLoading => _isLoading;
   String get filterSentiment => _filterSentiment;
+  // "Held" here means the article's related ticker is one the user actually
+  // owns (article.isHeld, set from heldTickers in loadNews below) — this is
+  // the "market filter" the held/watchlist prioritization already computed
+  // data for but never exposed as an actual filter toggle.
+  bool get heldOnly => _heldOnly;
   // True when the current article list is fallback demo content, not a
   // real backend response (e.g. the backend is unreachable or returned no data).
   bool get isMockNews => _isMockNews;
@@ -22,8 +28,12 @@ class MarketIntelligenceState extends ChangeNotifier {
   MarketIntelligenceService get service => _api;
 
   List<NewsArticle> get filteredArticles {
-    if (_filterSentiment == 'All') return _articles;
-    return _articles.where((a) => a.sentiment?.displayName == _filterSentiment).toList();
+    var list = _articles;
+    if (_heldOnly) list = list.where((a) => a.isHeld).toList();
+    if (_filterSentiment != 'All') {
+      list = list.where((a) => a.sentiment?.displayName == _filterSentiment).toList();
+    }
+    return list;
   }
 
   // Load news from the API. Held (portfolio) tickers matter more than ones
@@ -75,6 +85,11 @@ class MarketIntelligenceState extends ChangeNotifier {
   // Update filter
   void setFilter(String filter) {
     _filterSentiment = filter;
+    notifyListeners();
+  }
+
+  void setHeldOnly(bool value) {
+    _heldOnly = value;
     notifyListeners();
   }
 

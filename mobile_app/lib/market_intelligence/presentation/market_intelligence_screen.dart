@@ -62,6 +62,7 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
       body: Column(
         children: [
           if (state.isMockNews) _buildDemoDataBanner(),
+          _buildHeldOnlyToggle(state),
           _buildSentimentFilterBar(state),
           _buildMarketPulseHeader(state),
           Expanded(
@@ -193,6 +194,38 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
                 color: color, fontSize: 11, fontWeight: FontWeight.w600),
           ),
         ],
+      ),
+    );
+  }
+
+  // The "market filter" — narrows the feed down to articles about tickers
+  // the user actually holds (article.isHeld), vs everything on the
+  // watchlist. The isHeld data already existed for the "📌 Held" badge and
+  // held-first sort; this is the first place it's exposed as a filter.
+  Widget _buildHeldOnlyToggle(MarketIntelligenceState state) {
+    final colors = context.appColors;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: GestureDetector(
+        onTap: () => state.setHeldOnly(!state.heldOnly),
+        child: Row(
+          children: [
+            Icon(
+              state.heldOnly ? Icons.check_box : Icons.check_box_outline_blank,
+              size: 18,
+              color: state.heldOnly ? const Color(0xFFFFA726) : colors.textTertiary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Held tickers only',
+              style: TextStyle(
+                color: state.heldOnly ? const Color(0xFFFFA726) : colors.textSecondary,
+                fontSize: 13,
+                fontWeight: state.heldOnly ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
