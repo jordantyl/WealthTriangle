@@ -142,12 +142,22 @@ def run_time_machine(history_df, initial_capital=10000.0):
     is large relative to the asset's Average Daily Trading Volume.
 
     Returns Iron Triangle metrics:
-      - Return  -> CAGR, final capital
+      - Return  -> CAGR, final capital, dividends actually received while
+        holding (previously the "profit" figure was price-only and silently
+        ignored every dividend paid during the window)
       - Safety  -> Maximum Drawdown, volatility risk score
       - Liquidity -> ADTV, slippage penalty, liquidity label
     """
     if len(history_df) < 2:
         return {"error": "Not enough data in the selected date range."}
+
+    # Pulled from the RAW frame before gap-filling reindexes it — dividends
+    # only ever land on real trading days, so this is safe either way, but
+    # doing it first keeps this independent of the reindex/ffill below.
+    dividends_per_share = 0.0
+    if 'Dividends' in history_df.columns:
+        divs = history_df['Dividends']
+        dividends_per_share = float(divs[divs > 0].sum())
 
     history_df = _fill_market_holiday_gaps(history_df)
     prices = history_df['Close']
@@ -189,6 +199,11 @@ def run_time_machine(history_df, initial_capital=10000.0):
     final_capital = shares * effective_sell
     profit = final_capital - initial_capital
 
+    # Dividends the position would have actually collected while held —
+    # a real total-return figure, not just the buy/sell price delta.
+    dividends_received = round(shares * dividends_per_share, 2)
+    total_return_profit = round(profit + dividends_received, 2)
+
     # Cost of illiquidity vs a "perfect" frictionless trade
     frictionless_final = (initial_capital / raw_buy) * raw_sell
     liquidity_penalty_cost = frictionless_final - final_capital
@@ -203,6 +218,10 @@ def run_time_machine(history_df, initial_capital=10000.0):
         "initial_capital": round(initial_capital, 2),
         "final_capital": round(final_capital, 2),
         "profit": round(profit, 2),
+        "shares": round(shares, 6),
+        "dividends_per_share": round(dividends_per_share, 4),
+        "dividends_received": dividends_received,
+        "total_return_profit": total_return_profit,
         "buy_price": round(raw_buy, 2),
         "sell_price": round(raw_sell, 2),
         "cagr": backtest["historical_cagr"],
@@ -214,3 +233,52 @@ def run_time_machine(history_df, initial_capital=10000.0):
         "liquidity_label": liquidity_label,
         "trading_days": len(prices),
     }
+
+
+def extract_price_series(history_df, max_points=500):
+    """
+    Chart-ready OHLCV candles for the Time Machine screen, plus the
+    dividend/split events that occurred inside the selected window —
+    pulled straight from yfinance's Dividends/Stock Splits columns, which
+    the backtest response never surfaced before. Called on the RAW frame
+    (before run_time_machine's holiday-gap reindex) so every value here is
+    a real trading day, never a forward-filled/synthetic one.
+    """
+    candles = []
+    for idx, row in history_df.iterrows():
+        close = row.get('Close')
+        if close is None or pd.isna(close):
+            continue
+        candles.append({
+            "date": idx.strftime('%Y-%m-%d'),
+            "open": round(float(row['Open']), 4) if 'Open' in history_df.columns and not pd.isna(row['Open']) else round(float(close), 4),
+            "high": round(float(row['High']), 4) if 'High' in history_df.columns and not pd.isna(row['High']) else round(float(close), 4),
+            "low": round(float(row['Low']), 4) if 'Low' in history_df.columns and not pd.isna(row['Low']) else round(float(close), 4),
+            "close": round(float(close), 4),
+            "volume": float(row['Volume']) if 'Volume' in history_df.columns and not pd.isna(row['Volume']) else 0.0,
+        })
+
+    dividend_events = []
+    if 'Dividends' in history_df.columns:
+        for idx, amt in history_df['Dividends'].items():
+            if amt and amt > 0:
+                dividend_events.append({"date": idx.strftime('%Y-%m-%d'), "amount": round(float(amt), 4)})
+
+    split_events = []
+    if 'Stock Splits' in history_df.columns:
+        for idx, ratio in history_df['Stock Splits'].items():
+            if ratio and ratio > 0:
+                split_events.append({"date": idx.strftime('%Y-%m-%d'), "ratio": float(ratio)})
+
+    # Long ranges (multi-year) would otherwise ship thousands of candles —
+    # downsample evenly but always keep the first/last day and every day
+    # that has a dividend/split event so markers never go missing.
+    if len(candles) > max_points:
+        event_dates = {e["date"] for e in dividend_events} | {e["date"] for e in split_events}
+        step = len(candles) / max_points
+        kept_idx = {int(round(i * step)) for i in range(max_points)}
+        kept_idx.add(0)
+        kept_idx.add(len(candles) - 1)
+        candles = [c for i, c in enumerate(candles) if i in kept_idx or c["date"] in event_dates]
+
+    return candles, dividend_events, split_events

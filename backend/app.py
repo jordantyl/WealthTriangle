@@ -16,6 +16,7 @@ from algorithms import (
     calculate_historical_backtest,
     run_time_machine,
     calculate_momentum_score,
+    extract_price_series,
 )
 
 # Loads backend/.env into the process environment if the file exists (local
@@ -106,6 +107,7 @@ _firestore_admin = None
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore as admin_firestore, auth as admin_auth
+    from google.cloud.firestore_v1 import FieldFilter
     _key_path = os.path.join(os.path.dirname(__file__), "serviceAccountKey.json")
     _key_json_env = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
     if os.path.exists(_key_path):
@@ -134,17 +136,21 @@ except Exception as e:
 # has); on a machine without serviceAccountKey.json (local dev), this is
 # skipped so the app keeps working with just the X-API-Key check.
 # =====================================================================
-def _verified_uid_or_none():
+def _verified_claims_or_none():
     if _firestore_admin is None:
         return None
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         return None
     try:
-        decoded = admin_auth.verify_id_token(header[len("Bearer "):])
-        return decoded.get("uid")
+        return admin_auth.verify_id_token(header[len("Bearer "):])
     except Exception:
         return None
+
+
+def _verified_uid_or_none():
+    claims = _verified_claims_or_none()
+    return claims.get("uid") if claims else None
 
 
 def _require_firebase_user():
@@ -292,6 +298,14 @@ def time_machine_backtest():
         result = run_time_machine(df, initial_capital=capital)
         if "error" in result:
             return jsonify(result), 400
+
+        # Chart + event-timeline data (Time Machine "deep view") — pulled
+        # from the same raw frame, independent of run_time_machine's
+        # gap-filled copy so candle dates always match real trading days.
+        candles, dividend_events, split_events = extract_price_series(df)
+        result["price_series"] = candles
+        result["dividend_events"] = dividend_events
+        result["split_events"] = split_events
 
         result["symbol"] = ticker
         result["start_date"] = start
@@ -830,6 +844,82 @@ def search_ticker():
         return jsonify([])
 
 
+def _infer_dividend_frequency(divs):
+    """
+    Infers payments/year from the median gap between the most recent
+    payment dates, rather than just counting how many landed in the last
+    365 days — that count undercounts a company that only recently started
+    paying, or that happened to have one payment slip just outside the
+    trailing window this particular day.
+    """
+    if len(divs) == 0:
+        return 0
+    if len(divs) == 1:
+        return 1
+    recent_dates = divs.tail(8).index
+    gaps_days = [(recent_dates[i] - recent_dates[i - 1]).days for i in range(1, len(recent_dates))]
+    gaps_days.sort()
+    median_gap = gaps_days[len(gaps_days) // 2]
+    if median_gap <= 45:
+        return 12  # monthly
+    elif median_gap <= 135:
+        return 4  # quarterly
+    elif median_gap <= 270:
+        return 2  # semi-annual
+    else:
+        return 1  # annual
+
+
+# =====================================================================
+# REAL DIVIDEND HISTORY — replaces the flat "trailing yield %" passive
+# income estimate with an actual payment-schedule-based prediction:
+# most recent per-payment amount x how many times/year this ticker
+# actually pays (inferred from payment date gaps, not assumed).
+# GET /api/dividend_history?ticker=AAPL
+# =====================================================================
+@app.route('/api/dividend_history', methods=['GET'])
+def dividend_history():
+    ticker = request.args.get('ticker', '').upper().strip()
+    if not ticker:
+        return jsonify({"error": "ticker required"}), 400
+
+    try:
+        stock = yf.Ticker(ticker)
+        divs = stock.dividends
+
+        if divs is None or divs.empty:
+            return jsonify({
+                "symbol": ticker,
+                "payments": [],
+                "frequency_per_year": 0,
+                "trailing_12m_total": 0.0,
+                "projected_annual_per_share": 0.0,
+            })
+
+        frequency_per_year = _infer_dividend_frequency(divs)
+        most_recent_amount = float(divs.iloc[-1])
+        projected_annual_per_share = round(most_recent_amount * frequency_per_year, 4)
+
+        one_year_ago = pd.Timestamp.now(tz=divs.index.tz) - pd.Timedelta(days=365)
+        trailing_12m_total = float(divs[divs.index >= one_year_ago].sum())
+
+        payments = [
+            {"date": idx.strftime('%Y-%m-%d'), "amount": round(float(amt), 4)}
+            for idx, amt in divs.tail(12).items()
+        ]
+
+        return jsonify({
+            "symbol": ticker,
+            "payments": payments,
+            "frequency_per_year": frequency_per_year,
+            "trailing_12m_total": round(trailing_12m_total, 4),
+            "projected_annual_per_share": projected_annual_per_share,
+        })
+    except Exception as e:
+        print(f"Dividend History Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/stock', methods=['GET'])
 def get_stock_data():
     ticker = request.args.get('ticker', 'NVDA').upper()
@@ -1007,6 +1097,269 @@ def admin_status():
     return jsonify({"isAdmin": auth_error is None})
 
 
+# =====================================================================
+# ADMIN USERS — lists Firebase Auth accounts (uid/email/created/last
+# sign-in) so the admin panel can show who's signed up without going
+# through the Firebase Console by hand. Auth is the source of truth for
+# "who has an account" (Firestore's users/ collection only has docs for
+# people who got past sign-up, e.g. finished onboarding).
+# GET /api/admin/users
+# =====================================================================
+@app.route('/api/admin/users', methods=['GET'])
+def admin_users():
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    users = []
+    for user in admin_auth.list_users().iterate_all():
+        users.append({
+            "uid": user.uid,
+            "email": user.email,
+            "createdAt": user.user_metadata.creation_timestamp,
+            "lastSignInAt": user.user_metadata.last_sign_in_timestamp,
+            "isAdmin": user.uid in ADMIN_UIDS,
+        })
+    users.sort(key=lambda u: u["createdAt"] or 0, reverse=True)
+    return jsonify({"users": users})
+
+
+# =====================================================================
+# ADMIN USER DETAIL — drill-down for a single user: academy progress,
+# and counts of their holdings/badges/tycoon battles. Firestore doc reads
+# are per-user here (not aggregate), so this is only ever called for one
+# uid at a time from the Users tab, never in a list loop.
+# GET /api/admin/users/<uid>/detail
+# =====================================================================
+@app.route('/api/admin/users/<uid>/detail', methods=['GET'])
+def admin_user_detail(uid):
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    user_ref = _firestore_admin.collection('users').document(uid)
+    profile_doc = user_ref.get()
+    academy_doc = user_ref.collection('academy').document('stats').get()
+    holdings = user_ref.collection('holdings').count().get()
+    badges = user_ref.collection('badges').count().get()
+    hosted = _firestore_admin.collection('tycoon_battles') \
+        .where(filter=FieldFilter('hostId', '==', uid)).count().get()
+    guested = _firestore_admin.collection('tycoon_battles') \
+        .where(filter=FieldFilter('guestId', '==', uid)).count().get()
+    return jsonify({
+        "profile": profile_doc.to_dict() if profile_doc.exists else None,
+        "academy": academy_doc.to_dict() if academy_doc.exists else None,
+        "holdingsCount": holdings[0][0].value,
+        "badgesCount": badges[0][0].value,
+        "tycoonBattlesPlayed": hosted[0][0].value + guested[0][0].value,
+    })
+
+
+# =====================================================================
+# ADMIN CONTENT COUNTS — live doc counts for each academy_* collection,
+# so "Update Database" isn't a black box you press and hope worked.
+# Uses Firestore's count() aggregation (server-side, no document reads)
+# rather than fetching every doc just to len() them.
+# GET /api/admin/content_counts
+# =====================================================================
+ACADEMY_COLLECTIONS = [
+    "academy_scenarios", "academy_quizzes", "academy_flash",
+    "academy_trade_items", "academy_trade_events",
+]
+
+
+@app.route('/api/admin/content_counts', methods=['GET'])
+def admin_content_counts():
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    counts = {}
+    for name in ACADEMY_COLLECTIONS:
+        result = _firestore_admin.collection(name).count().get()
+        counts[name] = result[0][0].value
+    return jsonify({"counts": counts})
+
+
+def _require_admin_write():
+    """Same hard BACKEND_API_KEY requirement as /api/admin/seed (see that
+    route's comment) — these endpoints write shared content live to
+    Firestore, so they must never be reachable by accident just because
+    the global opt-in X-API-Key toggle happens to be off."""
+    if not BACKEND_API_KEY:
+        return jsonify({
+            "error": "Set BACKEND_API_KEY on the backend (and the same value "
+                     "in mobile_app/lib/.env) before using this endpoint."
+        }), 503
+    if request.headers.get("X-API-Key", "") != BACKEND_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
+    return _require_admin_user()
+
+
+# =====================================================================
+# ADMIN CONTENT EDITOR — per-document CRUD for the academy_* collections,
+# so content can be authored live from the admin panel instead of only
+# via bulk overwrite from the app's hardcoded Dart defaults (/api/admin/
+# seed, kept around as a "reset to defaults" tool). Firestore is the
+# source of truth for these collections now; the Dart-side lists are just
+# the seed data a fresh environment starts from.
+# GET    /api/admin/content/<collection>            list all docs
+# POST   /api/admin/content/<collection>             create (auto ID)
+# PUT    /api/admin/content/<collection>/<doc_id>    upsert by ID
+# DELETE /api/admin/content/<collection>/<doc_id>    delete
+# =====================================================================
+@app.route('/api/admin/content/<collection>', methods=['GET'])
+def admin_list_content(collection):
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    if collection not in ACADEMY_COLLECTIONS:
+        return jsonify({"error": "Unknown collection"}), 404
+    docs = _firestore_admin.collection(collection).stream()
+    return jsonify({"docs": [{"docId": d.id, **d.to_dict()} for d in docs]})
+
+
+def _log_admin_action(action, collection, doc_id, before, after):
+    """Records one content edit to admin_audit_log — see the ADMIN AUDIT
+    LOG section below for why. Best-effort: a logging failure shouldn't
+    fail the actual write the admin was trying to make, so this only
+    prints on error rather than raising."""
+    claims = _verified_claims_or_none() or {}
+    try:
+        _firestore_admin.collection('admin_audit_log').add({
+            "action": action,
+            "collection": collection,
+            "docId": doc_id,
+            "actorUid": claims.get("uid"),
+            "actorEmail": claims.get("email"),
+            "before": before,
+            "after": after,
+            "timestamp": admin_firestore.SERVER_TIMESTAMP,
+        })
+    except Exception as e:
+        print(f"Failed to write admin audit log entry: {e}")
+
+
+@app.route('/api/admin/content/<collection>', methods=['POST'])
+def admin_create_content(collection):
+    auth_error = _require_admin_write()
+    if auth_error:
+        return auth_error
+    if collection not in ACADEMY_COLLECTIONS:
+        return jsonify({"error": "Unknown collection"}), 404
+    data = request.get_json(silent=True) or {}
+    doc_ref = _firestore_admin.collection(collection).document()
+    doc_ref.set(data)
+    _log_admin_action("create", collection, doc_ref.id, None, data)
+    return jsonify({"docId": doc_ref.id})
+
+
+@app.route('/api/admin/content/<collection>/<doc_id>', methods=['PUT'])
+def admin_update_content(collection, doc_id):
+    auth_error = _require_admin_write()
+    if auth_error:
+        return auth_error
+    if collection not in ACADEMY_COLLECTIONS:
+        return jsonify({"error": "Unknown collection"}), 404
+    data = request.get_json(silent=True) or {}
+    doc_ref = _firestore_admin.collection(collection).document(doc_id)
+    existing = doc_ref.get()
+    before = existing.to_dict() if existing.exists else None
+    doc_ref.set(data)
+    _log_admin_action("update", collection, doc_id, before, data)
+    return jsonify({"ok": True})
+
+
+@app.route('/api/admin/content/<collection>/<doc_id>', methods=['DELETE'])
+def admin_delete_content(collection, doc_id):
+    auth_error = _require_admin_write()
+    if auth_error:
+        return auth_error
+    if collection not in ACADEMY_COLLECTIONS:
+        return jsonify({"error": "Unknown collection"}), 404
+    doc_ref = _firestore_admin.collection(collection).document(doc_id)
+    existing = doc_ref.get()
+    before = existing.to_dict() if existing.exists else None
+    doc_ref.delete()
+    _log_admin_action("delete", collection, doc_id, before, None)
+    return jsonify({"ok": True})
+
+
+# =====================================================================
+# ADMIN AUDIT LOG — read-only view of the trail _log_admin_action() writes
+# on every content create/update/delete: who (uid+email), what (collection
+# + doc), and a before/after snapshot. Content edits are otherwise silent
+# and irreversible, so this is the only way to answer "who changed this
+# and what did it look like before" after the fact.
+# GET /api/admin/audit_log
+# =====================================================================
+@app.route('/api/admin/audit_log', methods=['GET'])
+def admin_audit_log():
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    query = _firestore_admin.collection('admin_audit_log') \
+        .order_by('timestamp', direction=admin_firestore.Query.DESCENDING).limit(200)
+    entries = []
+    for doc in query.stream():
+        entry = doc.to_dict()
+        ts = entry.get('timestamp')
+        entry['timestamp'] = ts.timestamp() * 1000 if ts else None
+        entries.append(entry)
+    return jsonify({"entries": entries})
+
+
+# =====================================================================
+# ADMIN HEALTH — which optional integrations are actually configured on
+# this running backend. Booleans/counts only, never the AI/Sentry/backend
+# secret values themselves. adminUids IS included (not just the count) —
+# that's not a secret from someone who already passed _require_admin_user,
+# and the Users tab needs the full list to build the "add me to
+# ADMIN_UIDS" string for the promote-to-admin helper.
+# GET /api/admin/health
+# =====================================================================
+@app.route('/api/admin/health', methods=['GET'])
+def admin_health():
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    return jsonify({
+        "firebaseAdminConfigured": _firestore_admin is not None,
+        "geminiConfigured": bool(GEMINI_API_KEY),
+        "openaiConfigured": bool(OPENAI_API_KEY),
+        "sentryConfigured": bool(SENTRY_DSN),
+        "backendApiKeyConfigured": bool(BACKEND_API_KEY),
+        "adminUidCount": len(ADMIN_UIDS),
+        "adminUids": sorted(ADMIN_UIDS),
+    })
+
+
+# =====================================================================
+# ADMIN STATS — a quick activity pulse (total users, holdings tracked,
+# tycoon battles played, academy progress records) without opening
+# Firebase Console. count() aggregations keep this cheap even as data
+# grows, since Firestore does the counting server-side.
+# GET /api/admin/stats
+# =====================================================================
+@app.route('/api/admin/stats', methods=['GET'])
+def admin_stats():
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    total_users = sum(1 for _ in admin_auth.list_users().iterate_all())
+    holdings = _firestore_admin.collection_group("holdings").count().get()
+    battles = _firestore_admin.collection("tycoon_battles").count().get()
+    academy_progress = _firestore_admin.collection_group("academy").count().get()
+    return jsonify({
+        "totalUsers": total_users,
+        "totalHoldings": holdings[0][0].value,
+        "tycoonBattlesPlayed": battles[0][0].value,
+        "academyProgressRecords": academy_progress[0][0].value,
+    })
+
+
 if __name__ == '__main__':
     # Debug defaults OFF now — the Werkzeug debugger it enables allows
     # arbitrary code execution to anyone who can reach this server, and it
@@ -1018,4 +1371,9 @@ if __name__ == '__main__':
     # 5000 in production. Locally it just falls back to 5000 as before.
     debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+    # threaded=True — the Android emulator's NAT layer (10.0.2.2) has been
+    # observed dropping connections mid-response on the single-threaded dev
+    # server once a payload gets into the tens-of-KB range (e.g. Time
+    # Machine's price_series). Local dev only — Render runs gunicorn (see
+    # render.yaml), which isn't affected.
+    app.run(host='0.0.0.0', port=port, debug=debug_mode, threaded=True)
