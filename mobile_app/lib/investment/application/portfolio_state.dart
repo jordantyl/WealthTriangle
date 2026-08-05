@@ -57,6 +57,13 @@ class PortfolioItem {
   // is a legitimate value for non-dividend-paying stocks, not just "not
   // fetched yet" — no flat guessed rate is applied on top of it.
   final double dividendYield;
+  // Real payment-schedule-based dividend data (backend/app.py:
+  // dividend_history), refreshed alongside dividendYield. frequencyPerYear
+  // == 0 means either no dividend history was fetched yet or the ticker
+  // doesn't pay one — annualDividendIncome falls back to the yield-based
+  // estimate in that case so a fetch failure never zeroes out the number.
+  final int dividendFrequencyPerYear;
+  final double projectedAnnualDividendPerShare;
 
   PortfolioItem({
     required this.ticker, required this.quantity, required this.avgPrice, required this.currency,
@@ -65,11 +72,24 @@ class PortfolioItem {
     this.dailyChange = 0.0,
     this.currentMarketPrice = 0.0,
     this.dividendYield = 0.0,
+    this.dividendFrequencyPerYear = 0,
+    this.projectedAnnualDividendPerShare = 0.0,
   });
 
   double get totalValue => quantity * (currentMarketPrice > 0 ? currentMarketPrice : avgPrice);
   double get dailyGainLoss => totalValue * (dailyChange / 100);
-  double get annualDividendIncome => totalValue * (dividendYield / 100);
+
+  /// Real payment-history-based estimate (most recent per-share dividend x
+  /// how many times/year this ticker actually pays) when available;
+  /// otherwise falls back to the old trailing-yield x value approximation.
+  double get annualDividendIncome {
+    if (dividendFrequencyPerYear > 0) {
+      return quantity * projectedAnnualDividendPerShare;
+    }
+    return totalValue * (dividendYield / 100);
+  }
+
+  bool get usesRealDividendHistory => dividendFrequencyPerYear > 0;
 
   Map<String, dynamic> toFirestore() => {
     'ticker': ticker,
@@ -101,12 +121,16 @@ class DividendBreakdownItem {
   final String currency;
   final double dividendYield;
   final double annualDividend;
+  final int dividendFrequencyPerYear;
+  final bool usesRealDividendHistory;
 
   const DividendBreakdownItem({
     required this.ticker,
     required this.currency,
     required this.dividendYield,
     required this.annualDividend,
+    this.dividendFrequencyPerYear = 0,
+    this.usesRealDividendHistory = false,
   });
 }
 
@@ -132,6 +156,8 @@ class PortfolioState extends ChangeNotifier {
               currency: item.currency,
               dividendYield: item.dividendYield,
               annualDividend: item.annualDividendIncome,
+              dividendFrequencyPerYear: item.dividendFrequencyPerYear,
+              usesRealDividendHistory: item.usesRealDividendHistory,
             ))
         .toList();
   }
@@ -211,6 +237,10 @@ class PortfolioState extends ChangeNotifier {
     List<Future<PortfolioItem>> futures = _holdings.map((item) async {
       try {
         final result = await _api.fetchSimulation(item.ticker);
+        // Fetched separately/best-effort: a dividend-history failure (e.g.
+        // ticker never paid one) shouldn't fail the whole price refresh —
+        // it just falls back to the yield-based estimate via DividendHistory.none.
+        final divHistory = await _api.fetchDividendHistory(item.ticker);
         return PortfolioItem(
           ticker: item.ticker,
           quantity: item.quantity,
@@ -221,6 +251,8 @@ class PortfolioState extends ChangeNotifier {
           dailyChange: result.changePercent,
           currentMarketPrice: result.price,
           dividendYield: result.dividendYield,
+          dividendFrequencyPerYear: divHistory.frequencyPerYear,
+          projectedAnnualDividendPerShare: divHistory.projectedAnnualPerShare,
         );
       } catch (e) {
         print("Failed to refresh ${item.ticker}: $e");

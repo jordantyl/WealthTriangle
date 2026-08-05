@@ -5,6 +5,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:candlesticks/candlesticks.dart' as pkg;
 
 import '../../../firestore/constants/firestore_constants.dart';
 import 'simulation_history_screen.dart';
@@ -272,13 +273,129 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
     );
   }
 
+  List<pkg.Candle> _packageCandles() {
+    final raw = _result?['price_series'] as List? ?? const [];
+    final fmt = DateFormat('yyyy-MM-dd');
+    final candles = raw.map((c) {
+      final m = c as Map<String, dynamic>;
+      return pkg.Candle(
+        date: fmt.parse(m['date'] as String),
+        open: (m['open'] as num).toDouble(),
+        high: (m['high'] as num).toDouble(),
+        low: (m['low'] as num).toDouble(),
+        close: (m['close'] as num).toDouble(),
+        volume: (m['volume'] as num).toDouble(),
+      );
+    }).toList();
+    // Package wants newest-first; backend returns oldest-first.
+    return candles.reversed.toList();
+  }
+
+  /// Merges dividend + split events (both from the raw trading-day frame,
+  /// see backend/algorithms.py:extract_price_series) into one chronological
+  /// (newest-first) timeline so the "what actually happened" detail view
+  /// isn't just a price chart — it shows what moved the price too.
+  List<_TimelineEvent> _mergedEvents() {
+    final r = _result;
+    if (r == null) return const [];
+    final events = <_TimelineEvent>[];
+    for (final e in (r['dividend_events'] as List? ?? const [])) {
+      final m = e as Map<String, dynamic>;
+      events.add(_TimelineEvent(
+        date: DateTime.parse(m['date'] as String),
+        icon: Icons.savings,
+        color: Colors.greenAccent,
+        label: 'Dividend paid',
+        detail: '\$${(m['amount'] as num).toDouble().toStringAsFixed(4)} / share',
+      ));
+    }
+    for (final e in (r['split_events'] as List? ?? const [])) {
+      final m = e as Map<String, dynamic>;
+      final ratio = (m['ratio'] as num).toDouble();
+      events.add(_TimelineEvent(
+        date: DateTime.parse(m['date'] as String),
+        icon: Icons.call_split,
+        color: Colors.cyanAccent,
+        label: 'Stock split',
+        detail: '${ratio.toStringAsFixed(ratio.truncateToDouble() == ratio ? 0 : 2)}:1',
+      ));
+    }
+    events.sort((a, b) => b.date.compareTo(a.date));
+    return events;
+  }
+
+  Widget _buildChartSection() {
+    final candles = _packageCandles();
+    if (candles.length < 2) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('📈 PRICE HISTORY',
+            style: TextStyle(
+                color: Colors.amber,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1)),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 260,
+          child: pkg.Candlesticks(candles: candles),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEventTimeline() {
+    final events = _mergedEvents();
+    if (events.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          'No dividend payments or stock splits occurred during this window.',
+          style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
+        ),
+      );
+    }
+    final fmt = DateFormat('dd MMM yyyy');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: events.map((e) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              Icon(e.icon, color: e.color, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(e.label,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+                    Text(fmt.format(e.date),
+                        style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                  ],
+                ),
+              ),
+              Text(e.detail,
+                  style: TextStyle(color: e.color, fontWeight: FontWeight.bold, fontSize: 12)),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildResultCard(NumberFormat currency) {
     final r = _result!;
     final double profit = (r['profit'] as num?)?.toDouble() ?? 0.0;
     final double initialCapital = (r['initial_capital'] as num?)?.toDouble() ?? 0.0;
     final double finalCapital = (r['final_capital'] as num?)?.toDouble() ?? 0.0;
     final double liquidityPenaltyCost = (r['liquidity_penalty_cost'] as num?)?.toDouble() ?? 0.0;
-    final bool isWin = profit >= 0;
+    final double dividendsReceived = (r['dividends_received'] as num?)?.toDouble() ?? 0.0;
+    final double totalReturnProfit = (r['total_return_profit'] as num?)?.toDouble() ?? profit;
+    final bool isWin = totalReturnProfit >= 0;
     final Color mainColor = isWin ? Colors.greenAccent : Colors.redAccent;
 
     return Container(
@@ -298,19 +415,40 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
                     style: const TextStyle(color: Colors.grey, fontSize: 12)),
                 const SizedBox(height: 5),
                 Text(
-                  '${isWin ? '+' : ''}${currency.format(profit)}',
+                  '${isWin ? '+' : ''}${currency.format(totalReturnProfit)}',
                   style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
                       color: mainColor),
                 ),
                 Text(
-                  '${currency.format(initialCapital)} → ${currency.format(finalCapital)}',
+                  '${currency.format(initialCapital)} → ${currency.format(finalCapital + dividendsReceived)}',
                   style: const TextStyle(color: Colors.white70),
                 ),
+                if (dividendsReceived > 0) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '${currency.format(profit)} from price change  +  ${currency.format(dividendsReceived)} from dividends',
+                    style: const TextStyle(color: Colors.greenAccent, fontSize: 11),
+                  ),
+                ],
               ],
             ),
           ),
+          const Divider(height: 30, color: Colors.white24),
+
+          _buildChartSection(),
+          if (_packageCandles().length >= 2)
+            const Divider(height: 30, color: Colors.white24),
+
+          const Text('🗓️ EVENTS DURING THIS PERIOD',
+              style: TextStyle(
+                  color: Colors.amber,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1)),
+          const SizedBox(height: 10),
+          _buildEventTimeline(),
           const Divider(height: 30, color: Colors.white24),
 
           // 🔺 IRON TRIANGLE BREAKDOWN
@@ -392,4 +530,20 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
     }
     return 'Lesson: Compare this run against a different date range (e.g. include 2020) to see how market crashes affect the same strategy.';
   }
+}
+
+class _TimelineEvent {
+  final DateTime date;
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String detail;
+
+  const _TimelineEvent({
+    required this.date,
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.detail,
+  });
 }

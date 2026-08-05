@@ -4,9 +4,50 @@ import 'package:http/http.dart' as http;
 import '../domain/simulation_result.dart';
 import '../../shared/backend_headers.dart';
 
+/// Real dividend payment schedule for one ticker — from backend's
+/// /api/dividend_history (GET backend/app.py:dividend_history), which
+/// infers payments/year from actual payment date gaps rather than
+/// assuming quarterly. projectedAnnualPerShare = most recent per-payment
+/// amount x frequencyPerYear, so a recent raise/cut shows up immediately
+/// instead of being averaged away by a trailing-12-month sum.
+class DividendHistory {
+  final int frequencyPerYear;
+  final double trailing12mTotal;
+  final double projectedAnnualPerShare;
+
+  const DividendHistory({
+    this.frequencyPerYear = 0,
+    this.trailing12mTotal = 0.0,
+    this.projectedAnnualPerShare = 0.0,
+  });
+
+  static const DividendHistory none = DividendHistory();
+}
+
 class StockApi {
   // ✅ READ FROM .env
   static String get _baseUrl => dotenv.env['PYTHON_BACKEND_URL'] ?? 'http://10.0.2.2:5000/api/stock';
+  static String get _apiBaseUrl =>
+      dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+
+  Future<DividendHistory> fetchDividendHistory(String ticker) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_apiBaseUrl/api/dividend_history?ticker=$ticker'),
+              headers: backendHeaders())
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) return DividendHistory.none;
+      final data = json.decode(response.body);
+      return DividendHistory(
+        frequencyPerYear: (data['frequency_per_year'] ?? 0) as int,
+        trailing12mTotal: (data['trailing_12m_total'] ?? 0.0).toDouble(),
+        projectedAnnualPerShare: (data['projected_annual_per_share'] ?? 0.0).toDouble(),
+      );
+    } catch (_) {
+      // Non-fatal — callers fall back to the yield-based estimate.
+      return DividendHistory.none;
+    }
+  }
 
   Future<SimulationResult> fetchSimulation(String ticker, {String period = '1y'}) async {
     try {

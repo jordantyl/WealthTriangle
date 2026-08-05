@@ -277,8 +277,12 @@ class CashFlowScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(item.ticker, style: TextStyle(color: colors.textPrimary, fontWeight: FontWeight.bold)),
-                  Text('${item.dividendYield.toStringAsFixed(2)}% trailing yield',
-                      style: TextStyle(color: colors.textTertiary, fontSize: 11)),
+                  Text(
+                    item.usesRealDividendHistory
+                        ? 'Based on ${item.dividendFrequencyPerYear}x/year real payment history'
+                        : '${item.dividendYield.toStringAsFixed(2)}% trailing yield (estimated)',
+                    style: TextStyle(color: colors.textTertiary, fontSize: 11),
+                  ),
                 ],
               ),
             ),
