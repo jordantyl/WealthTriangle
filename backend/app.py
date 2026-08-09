@@ -176,21 +176,43 @@ def _require_firebase_user():
 ADMIN_UIDS = {u.strip() for u in os.environ.get("ADMIN_UIDS", "").split(",") if u.strip()}
 
 
+def _firestore_admin_uids():
+    """Everyone with role == 'admin' on their Firestore users/ doc — the
+    self-service side of admin access (see /promote below). A single query
+    instead of one read per user so /api/admin/users doesn't do N+1 reads."""
+    if _firestore_admin is None:
+        return set()
+    docs = _firestore_admin.collection('users').where(
+        filter=FieldFilter('role', '==', 'admin')).stream()
+    return {d.id for d in docs}
+
+
+def _is_admin(uid):
+    """ADMIN_UIDS (env var, permanent bootstrap — can't be locked out by a
+    Firestore edit) unioned with anyone promoted via Firestore role."""
+    if uid in ADMIN_UIDS:
+        return True
+    if _firestore_admin is None:
+        return False
+    doc = _firestore_admin.collection('users').document(uid).get()
+    return doc.exists and doc.to_dict().get('role') == 'admin'
+
+
 def _require_admin_user():
     """Returns None if OK to proceed, else a (response, status) error tuple.
-    Stricter than _require_firebase_user(): the caller's UID must also be
-    in ADMIN_UIDS, not merely a valid signed-in account."""
+    Stricter than _require_firebase_user(): the caller must also pass
+    _is_admin(), not merely be a valid signed-in account."""
     if _firestore_admin is None:
         return None  # Firebase Admin not configured — skip (matches dev fallback above)
     uid = _verified_uid_or_none()
     if uid is None:
         return jsonify({"error": "Unauthorized: valid Firebase sign-in required"}), 401
-    if not ADMIN_UIDS:
+    if not ADMIN_UIDS and not _firestore_admin_uids():
         return jsonify({
             "error": "Server misconfigured: set ADMIN_UIDS to at least one "
                      "Firebase UID before this endpoint can be used."
         }), 503
-    if uid not in ADMIN_UIDS:
+    if not _is_admin(uid):
         return jsonify({"error": "Forbidden: admin access required"}), 403
     return None
 
@@ -1110,17 +1132,60 @@ def admin_users():
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    firestore_admin_uids = _firestore_admin_uids()
     users = []
     for user in admin_auth.list_users().iterate_all():
+        # isEnvAdmin: locked in via ADMIN_UIDS, can't be revoked from the
+        # panel — the client uses this to hide the demote button for them.
+        is_env_admin = user.uid in ADMIN_UIDS
         users.append({
             "uid": user.uid,
             "email": user.email,
             "createdAt": user.user_metadata.creation_timestamp,
             "lastSignInAt": user.user_metadata.last_sign_in_timestamp,
-            "isAdmin": user.uid in ADMIN_UIDS,
+            "isAdmin": is_env_admin or user.uid in firestore_admin_uids,
+            "isEnvAdmin": is_env_admin,
         })
     users.sort(key=lambda u: u["createdAt"] or 0, reverse=True)
     return jsonify({"users": users})
+
+
+# =====================================================================
+# ADMIN PROMOTE/DEMOTE — self-service alternative to editing ADMIN_UIDS on
+# Render (which needs a manual redeploy every time). Sets/clears `role` on
+# the target's users/{uid} Firestore doc; _is_admin() above reads it back.
+# Only an existing admin can call this (_require_admin_user gate), and
+# firestore.rules blocks clients from writing `role` on their own doc
+# directly, so the Admin SDK write here is the only path to becoming one.
+# POST /api/admin/users/<uid>/promote
+# POST /api/admin/users/<uid>/demote
+# =====================================================================
+@app.route('/api/admin/users/<uid>/promote', methods=['POST'])
+def admin_promote_user(uid):
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    _firestore_admin.collection('users').document(uid).set(
+        {"role": "admin"}, merge=True)
+    return jsonify({"ok": True})
+
+
+@app.route('/api/admin/users/<uid>/demote', methods=['POST'])
+def admin_demote_user(uid):
+    auth_error = _require_admin_user()
+    if auth_error:
+        return auth_error
+    caller_uid = _verified_uid_or_none()
+    if uid == caller_uid:
+        return jsonify({"error": "Cannot demote your own account"}), 400
+    if uid in ADMIN_UIDS:
+        return jsonify({
+            "error": "This user is an admin via the server's ADMIN_UIDS "
+                     "env var, not Firestore — remove them there instead."
+        }), 400
+    _firestore_admin.collection('users').document(uid).set(
+        {"role": admin_firestore.DELETE_FIELD}, merge=True)
+    return jsonify({"ok": True})
 
 
 # =====================================================================

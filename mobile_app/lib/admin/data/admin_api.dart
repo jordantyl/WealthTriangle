@@ -70,6 +70,28 @@ class AdminApi {
     return List<Map<String, dynamic>>.from(data['entries'] as List);
   }
 
+  static Future<void> promoteToAdmin(String uid) async {
+    final headers = await authedBackendHeaders();
+    final response = await http.post(
+      Uri.parse('$defaultBackendBaseUrl/api/admin/users/$uid/promote'),
+      headers: headers,
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Promote failed (${response.statusCode}): ${response.body}');
+    }
+  }
+
+  static Future<void> demoteAdmin(String uid) async {
+    final headers = await authedBackendHeaders();
+    final response = await http.post(
+      Uri.parse('$defaultBackendBaseUrl/api/admin/users/$uid/demote'),
+      headers: headers,
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Demote failed (${response.statusCode}): ${response.body}');
+    }
+  }
+
   static Future<void> deleteContentDoc(String collection, String docId) async {
     final headers = await authedBackendHeaders();
     final response = await http.delete(

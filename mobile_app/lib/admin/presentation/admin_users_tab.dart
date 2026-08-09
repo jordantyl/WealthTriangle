@@ -111,6 +111,7 @@ class _AdminUsersTabState extends State<AdminUsersTab> {
 
   Widget _buildUserRow(Map<String, dynamic> user) {
     final isAdmin = user['isAdmin'] == true;
+    final isEnvAdmin = user['isEnvAdmin'] == true;
     final uid = user['uid'] as String? ?? '';
     final email = user['email'] as String? ?? '(no email)';
     return Card(
@@ -134,7 +135,19 @@ class _AdminUsersTabState extends State<AdminUsersTab> {
               IconButton(
                 icon: const Icon(Icons.admin_panel_settings_outlined, size: 20),
                 tooltip: 'Promote to Admin',
-                onPressed: () => showPromoteToAdminDialog(context, uid: uid, email: email),
+                onPressed: () async {
+                  final result = await showPromoteToAdminDialog(context, uid: uid, email: email);
+                  if (result == true) _load();
+                },
+              )
+            else if (!isEnvAdmin)
+              IconButton(
+                icon: const Icon(Icons.remove_moderator_outlined, size: 20),
+                tooltip: 'Remove Admin Access',
+                onPressed: () async {
+                  final result = await showDemoteAdminDialog(context, uid: uid, email: email);
+                  if (result == true) _load();
+                },
               ),
             IconButton(
               icon: const Icon(Icons.copy, size: 18),

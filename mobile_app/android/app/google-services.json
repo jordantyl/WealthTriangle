@@ -12,7 +12,20 @@
           "package_name": "com.example.wealth_triangle"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "6099096342-aeecafm3bk4ppjmmbslui9l60n0nqt16.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.wealth_triangle",
+            "certificate_hash": "7601ff5a92d56d0915da05099af2041b37283c46"
+          }
+        },
+        {
+          "client_id": "6099096342-8dkqt4foik9lc5e52d8hsnk6dffj155b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAY4yH4S9KtEFCAxqd4s6f7faC95SwXYL4"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "6099096342-8dkqt4foik9lc5e52d8hsnk6dffj155b.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "6099096342-e98ets8353jjtmjpjngs7lfoos44lu5e.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.tylj"
+              }
+            }
+          ]
         }
       }
     },
@@ -31,7 +56,20 @@
           "package_name": "com.tyljordan.wealthtriangle"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "6099096342-jd6muj83tq26kjonhsfilfmji09gq1ga.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.tyljordan.wealthtriangle",
+            "certificate_hash": "7601ff5a92d56d0915da05099af2041b37283c46"
+          }
+        },
+        {
+          "client_id": "6099096342-8dkqt4foik9lc5e52d8hsnk6dffj155b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAY4yH4S9KtEFCAxqd4s6f7faC95SwXYL4"
@@ -39,7 +77,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "6099096342-8dkqt4foik9lc5e52d8hsnk6dffj155b.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "6099096342-e98ets8353jjtmjpjngs7lfoos44lu5e.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.tylj"
+              }
+            }
+          ]
         }
       }
     }

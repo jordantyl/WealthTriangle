@@ -401,6 +401,66 @@ class TestFirebaseAuthGate:
         assert r.get_json()["response"] == "hi there"
 
 
+class _FakeAdminDoc:
+    def __init__(self, data):
+        self.exists = data is not None
+        self._data = data or {}
+
+    def to_dict(self):
+        return dict(self._data)
+
+
+class _FakeAdminDocRef:
+    def __init__(self, store, key):
+        self._store = store
+        self._key = key
+
+    def get(self):
+        return _FakeAdminDoc(self._store.get(self._key))
+
+    def set(self, data, merge=False):
+        existing = dict(self._store.get(self._key) or {}) if merge else {}
+        for k, v in data.items():
+            if v is app_module.admin_firestore.DELETE_FIELD:
+                existing.pop(k, None)
+            else:
+                existing[k] = v
+        self._store[self._key] = existing
+
+
+class _FakeAdminCollection:
+    def __init__(self, store, name):
+        self._store = store
+        self._name = name
+
+    def document(self, doc_id):
+        return _FakeAdminDocRef(self._store, (self._name, doc_id))
+
+    def where(self, filter=None):
+        matches = [
+            doc_id for (coll, doc_id), data in self._store.items()
+            if coll == self._name and data.get("role") == "admin"
+        ]
+        return type("_FakeQuery", (), {"stream": lambda self: iter(
+            [type("_FakeQueryDoc", (), {"id": m})() for m in matches])})()
+
+
+class FakeFirestoreAdminUsers:
+    """Fake Firestore Admin SDK client covering exactly what _is_admin(),
+    _firestore_admin_uids(), and the promote/demote endpoints touch:
+    users/{uid} doc get/set (with DELETE_FIELD support) and a role=='admin'
+    where-query. `initial` seeds pre-existing docs as {uid: {field: value}}."""
+
+    def __init__(self, initial=None):
+        self._store = {("users", uid): dict(data) for uid, data in (initial or {}).items()}
+
+    def collection(self, name):
+        return _FakeAdminCollection(self._store, name)
+
+    def role_of(self, uid):
+        return self._store.get(("users", uid), {}).get("role")
+
+
 class TestAdminSeed:
     def test_rejects_when_backend_key_not_configured_at_all(self, client):
         r = client.post("/api/admin/seed", json={"collections": {"academy_scenarios": {}}})
@@ -490,10 +550,11 @@ class TestAdminSeed:
         assert r.status_code == 401
 
     def test_rejects_a_valid_but_non_admin_user(self, client, monkeypatch):
-        # A real, signed-in user who is simply not in ADMIN_UIDS — this is
-        # the exact gap being closed: previously any signed-in user passed.
+        # A real, signed-in user who is simply not in ADMIN_UIDS or promoted
+        # via Firestore — this is the exact gap being closed: previously any
+        # signed-in user passed.
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
-        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.post(
@@ -503,10 +564,11 @@ class TestAdminSeed:
         assert r.status_code == 403
 
     def test_rejects_when_admin_uids_not_configured(self, client, monkeypatch):
-        # Valid token, but the server has no ADMIN_UIDS set at all — fail
-        # closed rather than silently treating everyone as an admin.
+        # Valid token, but the server has no ADMIN_UIDS set and nobody's
+        # been promoted via Firestore either — fail closed rather than
+        # silently treating everyone as an admin.
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
-        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", set())
         r = client.post(
@@ -537,7 +599,7 @@ class TestAdminStatus:
         assert r.get_json() == {"isAdmin": False}
 
     def test_false_for_a_valid_but_non_admin_user(self, client, monkeypatch):
-        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.get("/api/admin/status")
@@ -545,7 +607,7 @@ class TestAdminStatus:
         assert r.get_json() == {"isAdmin": False}
 
     def test_false_when_admin_uids_not_configured(self, client, monkeypatch):
-        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", set())
         r = client.get("/api/admin/status")
@@ -553,9 +615,79 @@ class TestAdminStatus:
         assert r.get_json() == {"isAdmin": False}
 
     def test_true_for_an_actual_admin(self, client, monkeypatch):
-        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
         r = client.get("/api/admin/status")
         assert r.status_code == 200
         assert r.get_json() == {"isAdmin": True}
+
+    def test_true_for_a_user_promoted_via_firestore_role(self, client, monkeypatch):
+        # Not in ADMIN_UIDS at all — only has role: "admin" on their
+        # Firestore users/ doc, via the promote endpoint below.
+        monkeypatch.setattr(
+            app_module, "_firestore_admin",
+            FakeFirestoreAdminUsers({"promoted-uid": {"role": "admin"}}),
+        )
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "promoted-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
+        r = client.get("/api/admin/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"isAdmin": True}
+
+
+class TestAdminPromoteDemote:
+    def test_promote_requires_admin_caller(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
+        r = client.post("/api/admin/users/some-target-uid/promote")
+        assert r.status_code == 403
+
+    def test_promote_sets_firestore_role_to_admin(self, client, monkeypatch):
+        fake = FakeFirestoreAdminUsers()
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
+        r = client.post("/api/admin/users/target-uid/promote")
+        assert r.status_code == 200
+        assert fake.role_of("target-uid") == "admin"
+
+    def test_demote_requires_admin_caller(self, client, monkeypatch):
+        monkeypatch.setattr(
+            app_module, "_firestore_admin",
+            FakeFirestoreAdminUsers({"target-uid": {"role": "admin"}}),
+        )
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
+        r = client.post("/api/admin/users/target-uid/demote")
+        assert r.status_code == 403
+
+    def test_demote_clears_firestore_role(self, client, monkeypatch):
+        fake = FakeFirestoreAdminUsers({"target-uid": {"role": "admin"}})
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
+        r = client.post("/api/admin/users/target-uid/demote")
+        assert r.status_code == 200
+        assert fake.role_of("target-uid") is None
+
+    def test_cannot_demote_self(self, client, monkeypatch):
+        fake = FakeFirestoreAdminUsers({"admin-uid": {"role": "admin"}})
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
+        r = client.post("/api/admin/users/admin-uid/demote")
+        assert r.status_code == 400
+        assert fake.role_of("admin-uid") == "admin"
+
+    def test_cannot_demote_an_env_admin(self, client, monkeypatch):
+        # ADMIN_UIDS admins aren't stored in Firestore at all — demoting
+        # them there would be a silent no-op, so this must fail loudly
+        # instead of pretending it worked.
+        fake = FakeFirestoreAdminUsers()
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid", "other-env-admin"})
+        r = client.post("/api/admin/users/other-env-admin/demote")
+        assert r.status_code == 400

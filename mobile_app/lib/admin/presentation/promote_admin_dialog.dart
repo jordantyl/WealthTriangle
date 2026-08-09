@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../data/admin_api.dart';
 
-/// Helper for the manual "add this UID to ADMIN_UIDS on Render" step —
-/// there's no API that can flip ADMIN_UIDS itself (it's a Render env var,
-/// not something this backend can rewrite about itself), so the best this
-/// can do is remove the copy-paste error risk: fetch the current list,
-/// compose the exact new value, and let you copy it in one click.
-Future<void> showPromoteToAdminDialog(BuildContext context, {required String uid, required String email}) {
-  return showDialog(
+/// Confirm-and-promote: sets role: "admin" on the target's Firestore doc via
+/// the backend (see admin_promote_user in app.py). Takes effect immediately
+/// — no more manual "paste this into Render's ADMIN_UIDS and wait for a
+/// redeploy" step.
+Future<bool?> showPromoteToAdminDialog(BuildContext context, {required String uid, required String email}) {
+  return showDialog<bool>(
     context: context,
     builder: (_) => _PromoteToAdminDialog(uid: uid, email: email),
   );
@@ -25,90 +23,130 @@ class _PromoteToAdminDialog extends StatefulWidget {
   State<_PromoteToAdminDialog> createState() => _PromoteToAdminDialogState();
 }
 
-class _PromoteToAdminDialogState extends State<_PromoteToAdminDialog> {
-  List<String>? _currentAdminUids;
-  String? _error;
-  bool _loading = true;
+/// Confirm-and-demote counterpart. Not offered for env-var (ADMIN_UIDS)
+/// admins — the caller should only show this for Firestore-promoted ones
+/// (see AdminUsersTab, which checks isEnvAdmin before wiring this in).
+Future<bool?> showDemoteAdminDialog(BuildContext context, {required String uid, required String email}) {
+  return showDialog<bool>(
+    context: context,
+    builder: (_) => _DemoteAdminDialog(uid: uid, email: email),
+  );
+}
+
+class _DemoteAdminDialog extends StatefulWidget {
+  final String uid;
+  final String email;
+
+  const _DemoteAdminDialog({required this.uid, required this.email});
 
   @override
-  void initState() {
-    super.initState();
-    _load();
-  }
+  State<_DemoteAdminDialog> createState() => _DemoteAdminDialogState();
+}
 
-  Future<void> _load() async {
+class _DemoteAdminDialogState extends State<_DemoteAdminDialog> {
+  bool _working = false;
+  String? _error;
+
+  Future<void> _demote() async {
+    setState(() {
+      _working = true;
+      _error = null;
+    });
     try {
-      final health = await AdminApi.fetchHealth();
-      final uids = List<String>.from(health['adminUids'] as List? ?? []);
-      if (mounted) setState(() => _currentAdminUids = uids);
+      await AdminApi.demoteAdmin(widget.uid);
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() => _working = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final newValue = _currentAdminUids == null
-        ? null
-        : ({..._currentAdminUids!, widget.uid}.toList()..sort()).join(',');
-
     return AlertDialog(
-      title: const Text('Promote to Admin'),
+      title: const Text('Remove Admin Access'),
       content: SizedBox(
-        width: 420,
-        child: _loading
-            ? const SizedBox(height: 80, child: Center(child: CircularProgressIndicator()))
-            : _error != null
-                ? Text('Failed to load: $_error', style: const TextStyle(color: Colors.redAccent))
-                : _buildContent(newValue!),
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Remove admin access from ${widget.email}?'),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+            ],
+          ],
+        ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        TextButton(
+          onPressed: _working ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _working ? null : _demote,
+          style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+          child: _working
+              ? const SizedBox(
+                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Remove'),
+        ),
       ],
     );
   }
+}
 
-  Widget _buildContent(String newValue) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('${widget.email} is not on the admin allowlist yet.',
-            style: const TextStyle(color: Colors.white70)),
-        const SizedBox(height: 16),
-        const Text('1. Copy this value:', style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E1E2C),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: SelectableText(newValue, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-              ),
-              IconButton(
-                icon: const Icon(Icons.copy, size: 18),
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: newValue));
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
-                },
-              ),
+class _PromoteToAdminDialogState extends State<_PromoteToAdminDialog> {
+  bool _working = false;
+  String? _error;
+
+  Future<void> _promote() async {
+    setState(() {
+      _working = true;
+      _error = null;
+    });
+    try {
+      await AdminApi.promoteToAdmin(widget.uid);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Promote to Admin'),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Give ${widget.email} admin access? They\'ll be able to edit shared '
+                'content, view all users, and promote/demote other admins.'),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
             ],
-          ),
+          ],
         ),
-        const SizedBox(height: 16),
-        const Text(
-          '2. Go to the Render Dashboard → your backend service → Environment tab\n'
-          '3. Paste it as the value of ADMIN_UIDS (replacing the current value)\n'
-          '4. Save — Render will redeploy automatically\n'
-          '5. Have them sign out and back in on this page once it\'s live',
-          style: TextStyle(fontSize: 13),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _working ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _working ? null : _promote,
+          child: _working
+              ? const SizedBox(
+                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Promote'),
         ),
       ],
     );

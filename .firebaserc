@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "wealthtriangle"
-  }
+  },
+  "targets": {
+    "wealthtriangle": {
+      "hosting": {
+        "admin": [
+          "wealthtriangle-admin"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

@@ -8,8 +8,18 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ---- Per-user data: only the signed-in owner may read or write ----
+    // `role` (admin flag, checked by the backend's _is_admin()) is excluded
+    // from owner writes on purpose — otherwise any signed-in user could set
+    // role: "admin" on their own doc via the client SDK and pass the
+    // backend's admin check. Only the backend's Admin SDK (which bypasses
+    // these rules) may set it, via POST /api/admin/users/<uid>/promote.
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid
+                    && !('role' in request.resource.data);
+      allow update: if request.auth != null && request.auth.uid == uid
+                    && request.resource.data.get('role', null) == resource.data.get('role', null);
+      allow delete: if request.auth != null && request.auth.uid == uid;
 
       match /{subcollection}/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == uid;
