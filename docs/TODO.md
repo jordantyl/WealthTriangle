@@ -8,8 +8,3 @@ from the environment (set in the Render dashboard) — there's no in-app UI for 
 user or admin to add/rotate an AI API key. Revisit whether that's needed (e.g.
 admin panel field to swap the key without redeploying) or if env-var-only is fine
 long term.
-
-## Replace app logo / branding
-The lock icon on the login screen (and app icon/launcher assets) is a placeholder.
-Swap for real WealthTriangle branding when there's a logo/image to use. No rush —
-flag if a concept or reference image shows up.
