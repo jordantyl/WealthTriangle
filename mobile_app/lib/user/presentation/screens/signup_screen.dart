@@ -63,7 +63,7 @@ class _SignupScreenState extends State<SignupScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.person_add, size: 80, color: Colors.green),
+            Image.asset('assets/icon/logo_icon.png', height: 100),
             const SizedBox(height: 20),
             TextField(
               controller: _emailController,
