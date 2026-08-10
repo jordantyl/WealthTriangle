@@ -58,7 +58,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       length: 4,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('WealthTriangle Admin'),
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Image.asset('assets/icon/logo_icon.png', height: 28),
+              ),
+              const Text('WealthTriangle Admin'),
+            ],
+          ),
           bottom: const TabBar(tabs: [
             Tab(text: 'Overview', icon: Icon(Icons.dashboard_outlined)),
             Tab(text: 'Users', icon: Icon(Icons.people_outline)),

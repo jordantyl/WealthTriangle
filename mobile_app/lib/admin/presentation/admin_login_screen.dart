@@ -67,7 +67,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.admin_panel_settings, size: 56, color: Colors.blueAccent),
+                Image.asset('assets/icon/logo_icon.png', height: 72),
                 const SizedBox(height: 12),
                 const Text(
                   'WealthTriangle Admin',
