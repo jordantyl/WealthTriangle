@@ -31,7 +31,7 @@ class EventIntegrationService {
     for (final ticker in tickers.take(8)) {
       try {
         final response = await http
-            .get(Uri.parse('$_baseUrl/api/calendar_events?ticker=$ticker'), headers: backendHeaders())
+            .get(Uri.parse('$_baseUrl/api/calendar_events?ticker=$ticker'), headers: await authedBackendHeaders())
             .timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200) {

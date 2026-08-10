@@ -90,7 +90,7 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
 
     try {
       final response = await http
-          .get(Uri.parse(url), headers: backendHeaders())
+          .get(Uri.parse(url), headers: await authedBackendHeaders())
           .timeout(const Duration(seconds: 20));
       final data = json.decode(response.body);
 

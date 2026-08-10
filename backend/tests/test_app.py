@@ -334,9 +334,12 @@ class TestAssistantVision:
 
 class TestFirebaseAuthGate:
     """Covers _require_firebase_user()/_verified_uid_or_none() — the layer
-    added on top of the static BACKEND_API_KEY for /api/summarize,
-    /api/assistant and /api/admin/seed, since the API key ships inside the
-    app and isn't a real secret against a determined actor."""
+    added on top of the static BACKEND_API_KEY for every data/AI/admin
+    route (/api/stock, /api/backtest, /api/news, /api/calendar_events,
+    /api/search, /api/dividend_history, /api/summarize, /api/assistant,
+    /api/admin/seed), since the API key ships inside the app (both the APK
+    and, previously, a hosted web build) and isn't a real secret against a
+    determined actor."""
 
     def test_skipped_entirely_when_firebase_admin_not_configured(self, client, monkeypatch):
         # _firestore_admin is None by default via the reset_keys fixture —
@@ -358,6 +361,26 @@ class TestFirebaseAuthGate:
     def test_assistant_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "_firestore_admin", object())
         r = client.post("/api/assistant", json={"prompt": "hello"})
+        assert r.status_code == 401
+
+    def test_stock_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.get("/api/stock?ticker=AAPL")
+        assert r.status_code == 401
+
+    def test_backtest_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.get("/api/backtest?ticker=AAPL&start=2020-01-01&end=2023-01-01")
+        assert r.status_code == 401
+
+    def test_news_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.get("/api/news?symbols=AAPL")
+        assert r.status_code == 401
+
+    def test_search_rejects_missing_token_when_firebase_admin_configured(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_firestore_admin", object())
+        r = client.get("/api/search?q=AAPL")
         assert r.status_code == 401
 
     def test_rejects_malformed_authorization_header(self, client, monkeypatch):

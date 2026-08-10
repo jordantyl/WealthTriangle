@@ -15,7 +15,18 @@ import 'firebase_options_web.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await dotenv.load(fileName: 'lib/.env');
+  // lib/.env isn't published to this build's host (dotfiles are excluded on
+  // purpose — see firebase.json — so BACKEND_API_KEY never sits at a public
+  // URL). BACKEND_BASE_URL/BACKEND_API_KEY instead come from --dart-define
+  // at build time (see backend_headers.dart); this just needs dotenv
+  // initialized so any other dotenv.env[...] read elsewhere in
+  // AcademyState/etc. doesn't throw "not initialized" instead of returning
+  // null.
+  try {
+    await dotenv.load(fileName: 'lib/.env');
+  } catch (_) {
+    dotenv.loadFromString(isOptional: true);
+  }
 
   runApp(
     ChangeNotifierProvider(

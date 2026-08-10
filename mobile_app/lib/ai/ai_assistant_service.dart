@@ -166,7 +166,7 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     try {
       final response = await http.get(
         Uri.parse('$_baseUrl/api/search?q=${Uri.encodeQueryComponent(trimmed)}'),
-        headers: backendHeaders(),
+        headers: await authedBackendHeaders(),
       );
       if (response.statusCode != 200) return null;
       final List data = json.decode(response.body);

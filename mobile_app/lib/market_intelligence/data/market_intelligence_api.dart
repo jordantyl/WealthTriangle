@@ -64,7 +64,7 @@ class MarketIntelligenceService {
 
     try {
       final response = await http
-          .get(Uri.parse('$_baseUrl/api/news?symbols=$symbols'), headers: backendHeaders())
+          .get(Uri.parse('$_baseUrl/api/news?symbols=$symbols'), headers: await authedBackendHeaders())
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {

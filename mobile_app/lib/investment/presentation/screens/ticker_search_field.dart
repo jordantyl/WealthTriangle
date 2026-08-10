@@ -58,7 +58,7 @@ class _TickerSearchFieldState extends State<TickerSearchField> {
     setState(() => _isSearching = true);
     try {
       final response = await http
-          .get(Uri.parse('$_baseUrl/api/search?q=${Uri.encodeComponent(query)}'), headers: backendHeaders())
+          .get(Uri.parse('$_baseUrl/api/search?q=${Uri.encodeComponent(query)}'), headers: await authedBackendHeaders())
           .timeout(const Duration(seconds: 8));
       if (response.statusCode == 200 && mounted) {
         final List data = json.decode(response.body);

@@ -59,7 +59,7 @@ class _StockDashboardState extends State<StockDashboard> {
     final url = Uri.parse("$baseUrl/api/search?q=$query");
 
     try {
-      final response = await http.get(url, headers: backendHeaders());
+      final response = await http.get(url, headers: await authedBackendHeaders());
       if (response.statusCode == 200) {
         final List data = json.decode(response.body);
         

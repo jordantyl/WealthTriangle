@@ -34,7 +34,7 @@ class StockApi {
     try {
       final response = await http
           .get(Uri.parse('$_apiBaseUrl/api/dividend_history?ticker=$ticker'),
-              headers: backendHeaders())
+              headers: await authedBackendHeaders())
           .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) return DividendHistory.none;
       final data = json.decode(response.body);
@@ -52,7 +52,7 @@ class StockApi {
   Future<SimulationResult> fetchSimulation(String ticker, {String period = '1y'}) async {
     try {
       print("Fetching $ticker from $_baseUrl...");
-      final response = await http.get(Uri.parse("$_baseUrl?ticker=$ticker&period=$period"), headers: backendHeaders());
+      final response = await http.get(Uri.parse("$_baseUrl?ticker=$ticker&period=$period"), headers: await authedBackendHeaders());
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);

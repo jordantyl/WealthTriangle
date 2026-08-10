@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -81,9 +82,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim());
+      await FirebaseAuth.instance
+          .signInWithEmailAndPassword(
+              email: _emailController.text.trim(),
+              password: _passwordController.text.trim())
+          .timeout(const Duration(seconds: 15));
 
       await _clearFailedAttempts();
 
@@ -92,6 +95,14 @@ class _LoginScreenState extends State<LoginScreen> {
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
         );
+      }
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              "Connection timed out. Check your internet connection and try again."),
+          backgroundColor: Colors.redAccent,
+        ));
       }
     } on FirebaseAuthException catch (e) {
       // Count wrong-credential failures toward the lockout
@@ -114,6 +125,12 @@ class _LoginScreenState extends State<LoginScreen> {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(msg)));
       }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Login failed: $e")),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -123,7 +140,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loginWithGoogle() async {
     setState(() => _isLoading = true);
     try {
-      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+      final GoogleSignInAccount? googleUser =
+          await GoogleSignIn().signIn().timeout(const Duration(seconds: 30));
       if (googleUser == null) {
         // User cancelled the picker
         if (mounted) setState(() => _isLoading = false);
@@ -137,15 +155,19 @@ class _LoginScreenState extends State<LoginScreen> {
         idToken: googleAuth.idToken,
       );
 
-      final userCredential =
-          await FirebaseAuth.instance.signInWithCredential(credential);
+      final userCredential = await FirebaseAuth.instance
+          .signInWithCredential(credential)
+          .timeout(const Duration(seconds: 15));
 
       // First-time Google users need a wealth profile document too
-      // (same one signup_screen.dart creates for email users).
+      // (same one signup_screen.dart creates for email users). This
+      // Firestore round-trip is where a flaky network shows up as an
+      // endless spinner without a timeout — cloud_firestore's own default
+      // deadline is much longer than a user will wait.
       final uid = userCredential.user!.uid;
       final docRef =
           FirebaseFirestore.instance.collection('users').doc(uid);
-      final doc = await docRef.get();
+      final doc = await docRef.get().timeout(const Duration(seconds: 15));
       if (!doc.exists) {
         await docRef.set({
           'email': userCredential.user!.email,
@@ -155,7 +177,7 @@ class _LoginScreenState extends State<LoginScreen> {
           'RiskProfile': 'Unassigned',
           'TotalXP': 0,
           'createdAt': FieldValue.serverTimestamp(),
-        });
+        }).timeout(const Duration(seconds: 15));
       }
 
       await _clearFailedAttempts();
@@ -164,6 +186,20 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+      }
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              "Connection timed out. Check your internet connection and try again."),
+          backgroundColor: Colors.redAccent,
+        ));
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message ?? "Google Sign-In failed")),
         );
       }
     } catch (e) {

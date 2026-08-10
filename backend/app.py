@@ -230,21 +230,24 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # =====================================================================
-# 🔐 SHARED-SECRET PROTECTION for every endpoint below (except the root
-# health check). Opt-in: if BACKEND_API_KEY isn't set, requests are let
-# through unchecked (matches the RAPIDAPI/OPENAI keys' "not configured yet"
-# behavior elsewhere in this file). Set BACKEND_API_KEY here AND in
-# mobile_app/lib/.env (same value) to actually require it — otherwise a
-# stranger who finds this server's address can use it to burn your
-# OpenAI/RapidAPI quota for free.
+# 🔐 SHARED-SECRET PROTECTION — a coarse first-pass filter only, NOT the
+# real security boundary. It's a value bundled into every client build
+# (the APK's assets, and previously the hosted web build), so it must be
+# treated as effectively public: anyone can pull it out of the app. Every
+# route below that touches real data or paid API quota now additionally
+# requires a live Firebase ID token via _require_firebase_user()/
+# _require_admin_user() — a real, revocable, rate-limitable signed-in
+# account that this key alone can't forge. Opt-in: if BACKEND_API_KEY
+# isn't set, this check is skipped entirely (matches the RAPIDAPI/OPENAI
+# keys' "not configured yet" behavior elsewhere in this file).
 # =====================================================================
 BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY", "")
 if not BACKEND_API_KEY:
     print(
-        "⚠️  WARNING: BACKEND_API_KEY is not set — every endpoint on this "
-        "server is reachable by anyone who finds its address. Set "
-        "BACKEND_API_KEY (and the matching value in mobile_app/lib/.env) "
-        "before hosting this publicly."
+        "ℹ️  BACKEND_API_KEY is not set — the shared-secret filter is "
+        "disabled. Every route still requires a signed-in Firebase user, "
+        "so this only matters as a coarse pre-filter against anonymous "
+        "scanners, not as the primary access control."
     )
 
 
@@ -297,6 +300,9 @@ def index():
 # =====================================================================
 @app.route('/api/backtest', methods=['GET'])
 def time_machine_backtest():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
     ticker = request.args.get('ticker', '').upper().strip()
     start = request.args.get('start', '')
     end = request.args.get('end', '')
@@ -351,6 +357,9 @@ def time_machine_backtest():
 # =====================================================================
 @app.route('/api/news', methods=['GET'])
 def news_proxy():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
     symbols = request.args.get('symbols', '')
     if not symbols:
         return jsonify({"body": []})
@@ -410,6 +419,9 @@ def _date_to_epoch(d):
 
 @app.route('/api/calendar_events', methods=['GET'])
 def calendar_events_proxy():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
     ticker = request.args.get('ticker', '')
     if not ticker:
         return jsonify({"error": "ticker required"}), 400
@@ -818,6 +830,9 @@ def assistant_proxy():
 
 @app.route('/api/search', methods=['GET'])
 def search_ticker():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify([])
@@ -901,6 +916,9 @@ def _infer_dividend_frequency(divs):
 # =====================================================================
 @app.route('/api/dividend_history', methods=['GET'])
 def dividend_history():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
     ticker = request.args.get('ticker', '').upper().strip()
     if not ticker:
         return jsonify({"error": "ticker required"}), 400
@@ -944,6 +962,9 @@ def dividend_history():
 
 @app.route('/api/stock', methods=['GET'])
 def get_stock_data():
+    auth_error = _require_firebase_user()
+    if auth_error:
+        return auth_error
     ticker = request.args.get('ticker', 'NVDA').upper()
     period = request.args.get('period', '1y')
     try:
