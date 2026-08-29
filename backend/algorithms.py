@@ -59,6 +59,24 @@ def run_monte_carlo(ticker, history_df, years=1, simulations=100, momentum_score
     history_df = _fill_market_holiday_gaps(history_df)
     daily_returns = history_df['Close'].pct_change().dropna()
 
+    if len(daily_returns) < 2:
+        # Not enough price history to estimate drift/volatility (e.g. a
+        # brand-new IPO, or a short `period` query like "1d"/"5d") — mean/
+        # var/std on fewer than 2 return values are NaN, and Flask's
+        # jsonify() serializes NaN as a bare `NaN` token, which is not valid
+        # JSON and breaks the Flutter client's json.decode(). Fall back to a
+        # flat, zero-volatility forecast instead.
+        last_price = history_df['Close'].iloc[-1]
+        return {
+            "current_price": round(float(last_price), 2),
+            "expected_price_1y": round(float(last_price), 2),
+            "worst_case_1y": round(float(last_price), 2),
+            "best_case_1y": round(float(last_price), 2),
+            "risk_score_volatility": 0.0,
+            "momentum_score": round(float(np.clip(momentum_score, -1.0, 1.0)), 3),
+            "momentum_adjusted": True,
+        }
+
     log_returns = np.log(1 + daily_returns)
     u = log_returns.mean()
     var = log_returns.var()

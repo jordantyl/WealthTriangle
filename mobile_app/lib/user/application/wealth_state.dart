@@ -197,6 +197,11 @@ class WealthState extends ChangeNotifier {
 
   void updateRiskTolerance(double newTolerance) {
     _riskTolerance = newTolerance;
+    // Was missing here (every sibling setter has it) — the Profile screen's
+    // slider and the AI's set_risk_tolerance tool both updated the UI
+    // immediately but silently reverted to whatever was last saved (or the
+    // 50.0 default) on next app open, since nothing ever wrote it back.
+    _pushToCloud();
     notifyListeners();
   }
 
@@ -281,24 +286,44 @@ class WealthState extends ChangeNotifier {
         _financialGoal = (data['financialGoal'] as num?)?.toDouble();
         String? goalDateStr = data['goalDate'];
         _goalDate = goalDateStr != null ? DateTime.tryParse(goalDateStr) : null;
-        // ✅ LOAD WATCHLIST
-        if (data.containsKey('watchlist')) {
-          _watchlist = List<String>.from(data['watchlist']);
-        }
-        // ✅ LOAD PERSONALIZED PROFILE (avatar + preferred sectors)
-        if (data.containsKey('avatarEmoji')) {
-          _avatarEmoji = data['avatarEmoji'] ?? _avatarEmoji;
-        }
-        if (data.containsKey('preferredSectors')) {
-          _preferredSectors = List<String>.from(data['preferredSectors']);
-        }
-        // ✅ LOAD PREFERENCE
+        // These four used to only be assigned `if (data.containsKey(...))`,
+        // which left whatever was already in memory untouched for an
+        // account whose doc predates that field (e.g. any account created
+        // before avatars/sectors existed, or a brand-new signup — neither
+        // login_screen.dart's nor signup_screen.dart's initial doc write
+        // includes them). Since WealthState is a single long-lived Provider
+        // instance that outlives sign-out (see main.dart), that stale
+        // in-memory value was a PREVIOUS signed-in user's data leaking into
+        // the newly signed-in account — always assign a real value
+        // (falling back to the field's own default) so every sign-in starts
+        // from a clean, correct state regardless of what was in memory.
+        _watchlist = data.containsKey('watchlist')
+            ? List<String>.from(data['watchlist'])
+            : List<String>.from(defaultWatchlist);
+        _avatarEmoji = data['avatarEmoji'] ?? '🧑‍💼';
+        _preferredSectors = data.containsKey('preferredSectors')
+            ? List<String>.from(data['preferredSectors'])
+            : [];
         final prefIndex = data['trianglePreference'];
-        if (prefIndex is int &&
-            prefIndex >= 0 &&
-            prefIndex < TrianglePreference.values.length) {
-          _trianglePreference = TrianglePreference.values[prefIndex];
-        }
+        _trianglePreference = (prefIndex is int &&
+                prefIndex >= 0 &&
+                prefIndex < TrianglePreference.values.length)
+            ? TrianglePreference.values[prefIndex]
+            : TrianglePreference.balanced;
+      } else {
+        // No Firestore doc yet for this uid (signup/first-login's own write
+        // hasn't landed, or failed) — reset to defaults rather than leaving
+        // a previous account's in-memory values in place.
+        _monthlySalary = 3000.0;
+        _monthlyExpenses = 2000.0;
+        _currentSavings = 10000.0;
+        _riskTolerance = 50.0;
+        _financialGoal = null;
+        _goalDate = null;
+        _watchlist = List<String>.from(defaultWatchlist);
+        _avatarEmoji = '🧑‍💼';
+        _preferredSectors = [];
+        _trianglePreference = TrianglePreference.balanced;
       }
     } catch (e) {
       print("Failed to load wealth profile: $e");

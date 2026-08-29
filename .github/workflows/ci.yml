@@ -31,9 +31,7 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      # lib/.env is gitignored (holds real secrets locally) but pubspec.yaml
-      # declares it as a bundled asset, so asset-bundling fails with no file
-      # present at all — a placeholder is enough since these are pure unit
-      # tests that never read dotenv.env values.
-      - run: touch lib/.env
+      # lib/.env is no longer a bundled pubspec asset (see pubspec.yaml), and
+      # main.dart's dotenv.load() now tolerates it being absent, so no
+      # placeholder file is needed here anymore.
       - run: flutter test

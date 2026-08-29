@@ -22,7 +22,13 @@
       "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 540 1168)",
       "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 792 1436)",
       "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/platform-tools/adb.exe -s emulator-5554 shell input tap 534 1729)",
-      "Read(//c/Users/ASUS/AppData/Local/Pub/Cache/hosted/pub.dev/**)"
+      "Read(//c/Users/ASUS/AppData/Local/Pub/Cache/hosted/pub.dev/**)",
+      "Bash(export ANDROID_HOME=\"/c/Users/ASUS/AppData/Local/Android/Sdk\")",
+      "Bash(/c/Users/ASUS/AppData/Local/Android/Sdk/emulator/emulator.exe -list-avds)",
+      "Bash(nohup /c/Users/ASUS/AppData/Local/Android/Sdk/emulator/emulator.exe -avd Medium_Phone_API_36.1 -no-snapshot-load)",
+      "Bash(disown)",
+      "Bash(where android *)",
+      "Bash(flutter doctor *)"
     ],
     "additionalDirectories": [
       "C:\\invest lab\\mobile_app"

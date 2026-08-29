@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../../shared/backend_headers.dart';
 
 /// 🔍 Reusable ticker search field with autocomplete.
@@ -35,8 +34,7 @@ class _TickerSearchFieldState extends State<TickerSearchField> {
   List<Map<String, dynamic>> _results = [];
   bool _isSearching = false;
 
-  String get _baseUrl =>
-      dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+  String get _baseUrl => defaultBackendBaseUrl;
 
   @override
   void dispose() {

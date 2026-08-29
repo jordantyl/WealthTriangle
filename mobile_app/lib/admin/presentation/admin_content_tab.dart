@@ -40,6 +40,30 @@ class _AdminContentTabState extends State<AdminContentTab> {
     }
   }
 
+  Future<void> _confirmAndReset(String? collectionName) async {
+    final label = collectionName == null ? 'ALL content collections' : contentSchemas[collectionName]!.label;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset to defaults?'),
+        content: Text(
+          'This overwrites $label with the app\'s built-in starter content. '
+          'Any live edits made in the admin panel will be permanently lost. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _resetToDefaults(collectionName);
+  }
+
   Future<void> _resetToDefaults(String? collectionName) async {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _seeding = collectionName ?? 'all');
@@ -104,7 +128,7 @@ class _AdminContentTabState extends State<AdminContentTab> {
               : const Icon(Icons.restart_alt),
           label: const Text('Reset All to Defaults'),
           style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent),
-          onPressed: _seeding != null ? null : () => _resetToDefaults(null),
+          onPressed: _seeding != null ? null : () => _confirmAndReset(null),
         ),
       ],
     );
@@ -125,7 +149,7 @@ class _AdminContentTabState extends State<AdminContentTab> {
             TextButton(onPressed: () => _openCollection(key), child: const Text('Manage')),
             const SizedBox(width: 4),
             OutlinedButton(
-              onPressed: _seeding != null ? null : () => _resetToDefaults(key),
+              onPressed: _seeding != null ? null : () => _confirmAndReset(key),
               child: isSeeding
                   ? const SizedBox(
                       width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))

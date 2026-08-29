@@ -1,11 +1,11 @@
 {
-    "name": "wealth_triangle",
-    "short_name": "wealth_triangle",
+    "name": "WealthTriangle Admin",
+    "short_name": "WT Admin",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#FFFFFF",
     "theme_color": "#1B3A6B",
-    "description": "A new Flutter project.",
+    "description": "WealthTriangle admin console — manage users and Academy content.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

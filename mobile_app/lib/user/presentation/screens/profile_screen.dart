@@ -385,60 +385,64 @@ class ProfileScreen extends StatelessWidget {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2D2D44),
-        title: const Text("Set Financial Goal", style: TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                prefixText: "RM ",
-                prefixStyle: TextStyle(color: Colors.white),
-                labelText: "Target Amount",
-                labelStyle: TextStyle(color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 10),
-            ListTile(
-              title: Text(
-                "Target Date: ${DateFormat('MMM yyyy').format(selectedDate)}",
+      // StatefulBuilder instead of closing + recreating the whole dialog on
+      // date pick — the old approach rebuilt `controller` from
+      // wealthState.financialGoal every time, so typing an amount and then
+      // picking a date silently threw away whatever the user had just typed.
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF2D2D44),
+          title: const Text("Set Financial Goal", style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
                 style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  prefixText: "RM ",
+                  prefixStyle: TextStyle(color: Colors.white),
+                  labelText: "Target Amount",
+                  labelStyle: TextStyle(color: Colors.grey),
+                ),
               ),
-              trailing: const Icon(Icons.calendar_today, color: Colors.white),
-              onTap: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: selectedDate,
-                  firstDate: DateTime.now(),
-                  lastDate: DateTime.now().add(const Duration(days: 365 * 20)),
-                );
-                if (date != null) {
-                  selectedDate = date;
-                  Navigator.pop(ctx);
-                  _showGoalDialog(context, wealthState); // Reopen with new date
+              const SizedBox(height: 10),
+              ListTile(
+                title: Text(
+                  "Target Date: ${DateFormat('MMM yyyy').format(selectedDate)}",
+                  style: const TextStyle(color: Colors.white),
+                ),
+                trailing: const Icon(Icons.calendar_today, color: Colors.white),
+                onTap: () async {
+                  final date = await showDatePicker(
+                    context: ctx,
+                    initialDate: selectedDate,
+                    firstDate: DateTime.now(),
+                    lastDate: DateTime.now().add(const Duration(days: 365 * 20)),
+                  );
+                  if (date != null) {
+                    setDialogState(() => selectedDate = date);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL")),
+            ElevatedButton(
+              onPressed: () {
+                final goal = double.tryParse(controller.text);
+                if (goal != null && goal > 0) {
+                  wealthState.setFinancialGoal(goal, selectedDate);
+                  BadgeService.award(context, 'goal_setter');
                 }
+                Navigator.pop(ctx);
               },
+              child: const Text("SAVE"),
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL")),
-          ElevatedButton(
-            onPressed: () {
-              final goal = double.tryParse(controller.text);
-              if (goal != null && goal > 0) {
-                wealthState.setFinancialGoal(goal, selectedDate);
-                BadgeService.award(context, 'goal_setter');
-              }
-              Navigator.pop(ctx);
-            },
-            child: const Text("SAVE"),
-          ),
-        ],
       ),
     );
   }

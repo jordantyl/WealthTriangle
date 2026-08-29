@@ -132,9 +132,14 @@ class WatchlistScreen extends StatelessWidget {
                 title: Text(ticker, style: const TextStyle(fontWeight: FontWeight.bold)),
                 subtitle: Text(isDefault ? 'Default — always tracked' : 'Added by you'),
                 trailing: isDefault
-                    ? const Tooltip(
-                        message: 'Default tickers can\'t be removed',
-                        child: Icon(Icons.lock_outline, color: Colors.grey),
+                    ? IconButton(
+                        icon: const Icon(Icons.lock_outline, color: Colors.grey),
+                        tooltip: 'Default tickers can\'t be removed',
+                        onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Default tickers can\'t be removed — you can still add your own.'),
+                          ),
+                        ),
                       )
                     : IconButton(
                         icon: const Icon(Icons.delete_outline, color: Colors.redAccent),

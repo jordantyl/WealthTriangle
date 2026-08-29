@@ -1,0 +1,5 @@
+{
+  "BACKEND_BASE_URL": "https://wealthtriangle-backend.onrender.com",
+  "PYTHON_BACKEND_URL": "https://wealthtriangle-backend.onrender.com/api/stock",
+  "BACKEND_API_KEY": "same-value-as-BACKEND_API_KEY-in-backend/.env"
+}

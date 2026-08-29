@@ -28,7 +28,11 @@ class FloatingAssistantLauncher {
       height: bubbleSize,
       width: bubbleSize,
       alignment: OverlayAlignment.centerRight,
-      flag: OverlayFlag.defaultFlag,
+      // defaultFlag makes the overlay window never accept key input focus
+      // at all — the bubble's TextField could never bring up the soft
+      // keyboard. focusPointer is what the package docs recommend for any
+      // overlay that has a field needing a keyboard.
+      flag: OverlayFlag.focusPointer,
       visibility: NotificationVisibility.visibilitySecret,
       enableDrag: true,
       overlayTitle: 'WealthTriangle Assistant',

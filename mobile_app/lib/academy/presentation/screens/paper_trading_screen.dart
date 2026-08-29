@@ -365,7 +365,13 @@ class _PaperTradingScreenState extends State<PaperTradingScreen>
             children: [
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _handleBuy,
+                  // Disabled until the async Firestore restore finishes —
+                  // otherwise a trade made while restoring executes and
+                  // shows locally, then gets silently wiped out (along with
+                  // its trade-log entry) the moment the earlier restore call
+                  // resolves and overwrites cash/positions/tradeLog with the
+                  // stale pre-trade snapshot it fetched before the trade.
+                  onPressed: _isRestoring ? null : _handleBuy,
                   style: ElevatedButton.styleFrom(backgroundColor: _bullColor),
                   child: const Text('BUY', style: TextStyle(color: Colors.black)),
                 ),
@@ -373,7 +379,7 @@ class _PaperTradingScreenState extends State<PaperTradingScreen>
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _handleSell,
+                  onPressed: _isRestoring ? null : _handleSell,
                   style: ElevatedButton.styleFrom(backgroundColor: _bearColor),
                   child: const Text('SELL', style: TextStyle(color: Colors.white)),
                 ),

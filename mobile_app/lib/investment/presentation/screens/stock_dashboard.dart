@@ -6,7 +6,6 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../../application/investment_logic.dart';
 import '../../application/portfolio_state.dart';
@@ -32,7 +31,9 @@ class _StockDashboardState extends State<StockDashboard> {
   
   SimulationResult? _data;
   bool _isLoading = false;
-  String _selectedFilter = "All"; 
+  bool _slowLoading = false;      // true once a load has been running a while — reassures the user it isn't frozen
+  String? _loadError;             // set on failure/timeout so the spinner never just hangs forever with no feedback
+  String _selectedFilter = "All";
   String _selectedPeriod = '1y';
   Timer? _debounceTimer;          // ✅ ADDED
 
@@ -55,7 +56,7 @@ class _StockDashboardState extends State<StockDashboard> {
   Future<List<Map<String, String>>> _searchStocks(String query) async {
     if (query.isEmpty) return [];
 
-    final baseUrl = dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+    final baseUrl = defaultBackendBaseUrl;
     final url = Uri.parse("$baseUrl/api/search?q=$query");
 
     try {
@@ -72,14 +73,11 @@ class _StockDashboardState extends State<StockDashboard> {
           "tag_color": item['tag_color']?.toString() ?? "blue",
         }).toList();
 
-        if (_selectedFilter == "Malaysia") {
+        if (_selectedFilter == "Malaysia (KLCI)") {
           results = results.where((i) => i['symbol']!.toUpperCase().endsWith(".KL")).toList();
-        } 
-        else if (_selectedFilter == "US") {
+        }
+        else if (_selectedFilter == "US (S&P500/NDX)") {
           results = results.where((i) => i['tag_label'] == "US" || !i['symbol']!.contains(".")).toList();
-        } 
-        else if (_selectedFilter == "ETF") {
-          results = results.where((i) => i['type'] == "ETF").toList();
         }
         return results;
       }
@@ -355,7 +353,42 @@ class _StockDashboardState extends State<StockDashboard> {
               ],
             ),
             const SizedBox(height: 20),
-            if (_isLoading) const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator())),
+            if (_isLoading)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      const CircularProgressIndicator(),
+                      if (_slowLoading) ...[
+                        const SizedBox(height: 12),
+                        const Text(
+                          "Still working, please wait — first request after inactivity can take up to 30s.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey, fontSize: 12),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            if (_loadError != null)
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.redAccent),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(_loadError!, style: const TextStyle(color: Colors.redAccent))),
+                  ],
+                ),
+              ),
 
             if (_data != null) ...[
               const SizedBox(height: 20),
@@ -716,12 +749,40 @@ class _StockDashboardState extends State<StockDashboard> {
   }
 
   Future<void> _runSimulation(String ticker) async {
-    setState(() => _isLoading = true);
-    final result = await _logic.getPrediction(ticker, period: _selectedPeriod); 
     setState(() {
-      _data = result;
-      _isLoading = false;
+      _isLoading = true;
+      _slowLoading = false;
+      _loadError = null;
     });
+
+    // Purely cosmetic reassurance — the real timeout lives in
+    // StockApi.fetchSimulation (40s, matching the documented Render
+    // cold-start delay). This just tells the user it's still working
+    // rather than leaving a bare spinner up with no explanation.
+    final slowTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _slowLoading = true);
+    });
+
+    try {
+      final result = await _logic.getPrediction(ticker, period: _selectedPeriod);
+      if (!mounted) return;
+      setState(() => _data = result);
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() => _loadError =
+          "This is taking too long. The server may be waking up from idle (can take up to 30s) — please try again in a moment.");
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadError = "Couldn't load $ticker: $e");
+    } finally {
+      slowTimer.cancel();
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _slowLoading = false;
+        });
+      }
+    }
   }
 
   Future<void> _saveSimulationToHistory() async {

@@ -3,8 +3,6 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../../user/application/wealth_state.dart';
 import '../../../investment/application/portfolio_state.dart';
-import '../../../event_integrate/application/event_intelligence_state.dart';
-import '../../../event_integrate/domain/economic_event.dart';
 import 'cash_flow_screen.dart';
 
 class IncomeScreen extends StatefulWidget {
@@ -15,67 +13,6 @@ class IncomeScreen extends StatefulWidget {
 }
 
 class _IncomeScreenState extends State<IncomeScreen> {
-  // Real upcoming dividend ex-dates for held stocks, sourced from the same
-  // Event Integration service the Economic Calendar uses — rather than only
-  // showing PortfolioState's flat simulated-yield estimate, this gives an
-  // actual per-holding payout tracker (ticker, ex-date, $/share).
-  List<EconomicEvent> _dividendEvents = [];
-  bool _loadingDividends = true;
-  List<String> _lastFetchedTickers = [];
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeLoadDividends());
-  }
-
-  bool _sameTickers(List<String> a, List<String> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
-  Future<void> _maybeLoadDividends() async {
-    if (!mounted) return;
-    final tickers = Provider.of<PortfolioState>(context, listen: false)
-        .holdings
-        .map((h) => h.ticker)
-        .toList();
-
-    if (tickers.isEmpty) {
-      if (_dividendEvents.isEmpty && !_loadingDividends) return;
-      setState(() {
-        _dividendEvents = [];
-        _loadingDividends = false;
-        _lastFetchedTickers = [];
-      });
-      return;
-    }
-
-    if (_sameTickers(tickers, _lastFetchedTickers)) return;
-
-    setState(() => _loadingDividends = true);
-    final service = Provider.of<EventIntegrationState>(context, listen: false).api;
-    try {
-      final events = await service.fetchEventsForWatchlist(tickers);
-      if (!mounted) return;
-      final upcomingDividends = events
-          .where((e) => e.type == EventType.dividendExDate && e.isUpcoming)
-          .toList()
-        ..sort((a, b) => a.eventDate.compareTo(b.eventDate));
-      setState(() {
-        _dividendEvents = upcomingDividends;
-        _lastFetchedTickers = tickers;
-        _loadingDividends = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _loadingDividends = false);
-    }
-  }
-
   void _showAddDialog(BuildContext context) {
     final nameController = TextEditingController();
     final amountController = TextEditingController();
@@ -148,11 +85,6 @@ class _IncomeScreenState extends State<IncomeScreen> {
   Widget build(BuildContext context) {
     final wealthState = Provider.of<WealthState>(context);
     final portfolio = Provider.of<PortfolioState>(context);
-
-    // Holdings can change (buy/sell) independently of this widget's own
-    // rebuilds — re-check (cheaply, guarded by the ticker-list comparison)
-    // whenever the portfolio notifies.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeLoadDividends());
 
     double totalAnnualDividend = portfolio.totalAnnualDividendIncome;
     double totalMonthlyDividend = totalAnnualDividend / 12;
@@ -237,7 +169,7 @@ class _IncomeScreenState extends State<IncomeScreen> {
                       ],
                     ),
                   ),
-                  Text("+RM ${totalMonthlyDividend.toStringAsFixed(0)}/mo",
+                  Text("+RM ${totalMonthlyDividend.toStringAsFixed(2)}/mo",
                       style: const TextStyle(
                           color: Colors.greenAccent,
                           fontWeight: FontWeight.bold,
@@ -246,6 +178,12 @@ class _IncomeScreenState extends State<IncomeScreen> {
               ),
             ),
           ),
+          if (portfolio.holdings.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              child: _buildRemainingDividendsCard(portfolio),
+            ),
+          ],
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: InkWell(
@@ -295,7 +233,7 @@ class _IncomeScreenState extends State<IncomeScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: _buildDividendTracker(portfolio),
+            child: _buildUpcomingPayments(portfolio),
           ),
           const SizedBox(height: 10),
           const Padding(
@@ -344,7 +282,7 @@ class _IncomeScreenState extends State<IncomeScreen> {
                           style: const TextStyle(
                               color: Colors.grey, fontSize: 11)),
                       trailing: Text(
-                          "RM ${item.amount.toStringAsFixed(0)}",
+                          "RM ${item.amount.toStringAsFixed(2)}",
                           style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -361,18 +299,11 @@ class _IncomeScreenState extends State<IncomeScreen> {
     );
   }
 
-  Widget _buildDividendTracker(PortfolioState portfolio) {
-    if (_loadingDividends) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 16),
-        child: Center(
-            child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2))),
-      );
-    }
-
+  // Estimated payment dates, from each holding's real historical payment
+  // pattern (backend's /api/dividend_history -> upcoming_payments) rather
+  // than Yahoo's forward ex-dividend calendar, which for KLSE tickers is
+  // usually empty or stuck on the last-paid date rather than the next one.
+  Widget _buildUpcomingPayments(PortfolioState portfolio) {
     if (portfolio.holdings.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 10),
@@ -383,29 +314,19 @@ class _IncomeScreenState extends State<IncomeScreen> {
       );
     }
 
-    if (_dividendEvents.isEmpty) {
+    final upcoming = portfolio.upcomingDividendPayments;
+    if (upcoming.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 10),
         child: Text(
-          "No upcoming dividend ex-dates found for your current holdings.",
+          "No upcoming payments estimated from your current holdings' payment history.",
           style: TextStyle(color: Colors.grey, fontSize: 12),
         ),
       );
     }
 
     return Column(
-      children: _dividendEvents.map((event) {
-        PortfolioItem? holding;
-        for (final h in portfolio.holdings) {
-          if (h.ticker == event.ticker) {
-            holding = h;
-            break;
-          }
-        }
-        final qty = holding?.quantity ?? 0;
-        final perShare = event.dividendAmount ?? 0;
-        final total = perShare * qty;
-
+      children: upcoming.map((row) {
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(12),
@@ -429,11 +350,11 @@ class _IncomeScreenState extends State<IncomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(event.ticker ?? '',
+                    Text(row.ticker,
                         style: const TextStyle(
                             color: Colors.white, fontWeight: FontWeight.bold)),
                     Text(
-                      'Ex-date ${DateFormat('MMM d').format(event.eventDate)} · ${qty}x shares held',
+                      'Est. ${DateFormat('MMM d').format(row.expectedDate)} (from payment history)',
                       style: const TextStyle(color: Colors.grey, fontSize: 11),
                     ),
                   ],
@@ -442,12 +363,12 @@ class _IncomeScreenState extends State<IncomeScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('RM ${total.toStringAsFixed(2)}',
+                  Text('RM ${row.totalAmount.toStringAsFixed(2)}',
                       style: const TextStyle(
                           color: Colors.greenAccent,
                           fontWeight: FontWeight.bold,
                           fontSize: 16)),
-                  Text('RM ${perShare.toStringAsFixed(2)}/share',
+                  Text('RM ${row.amountPerShare.toStringAsFixed(2)}/share',
                       style: const TextStyle(color: Colors.grey, fontSize: 10)),
                 ],
               ),
@@ -455,6 +376,67 @@ class _IncomeScreenState extends State<IncomeScreen> {
           ),
         );
       }).toList(),
+    );
+  }
+
+  // Quick-glance total for "how much dividend income is still coming this
+  // calendar year" — the per-holding, dated breakdown lives in
+  // _buildUpcomingPayments() below; this is just its sum up top.
+  Widget _buildRemainingDividendsCard(PortfolioState portfolio) {
+    final total = portfolio.totalRemainingDividendThisYear;
+    final breakdown =
+        portfolio.holdings.where((h) => h.remainingDividendThisYear > 0).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2D2D44),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.tealAccent.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.calendar_month, color: Colors.tealAccent, size: 24),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text("Expected Dividends — Rest of This Year",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14)),
+              ),
+              Text("RM ${total.toStringAsFixed(2)}",
+                  style: const TextStyle(
+                      color: Colors.tealAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            "Estimated from each holding's real payment history — see the dated breakdown below.",
+            style: TextStyle(color: Colors.grey, fontSize: 11),
+          ),
+          if (breakdown.isNotEmpty) ...[
+            const Divider(color: Colors.white12, height: 20),
+            ...breakdown.map((h) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(h.ticker,
+                          style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      Text("RM ${h.remainingDividendThisYear.toStringAsFixed(2)}",
+                          style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
+                    ],
+                  ),
+                )),
+          ],
+        ],
+      ),
     );
   }
 }

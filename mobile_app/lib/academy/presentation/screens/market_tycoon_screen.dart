@@ -321,19 +321,7 @@ class _MarketTycoonScreenState extends State<MarketTycoonScreen> {
           double invested = _investments[asset]!;
           if (invested == 0) return const SizedBox.shrink();
 
-          // Map the new assets to the scenario's assetImpact (which still has Tech/Airlines/Gold/Oil)
-          // We map: Stocks -> Tech (growth), Bonds -> Banks (safe), Gold -> Gold, Cash -> stays cash (no impact)
-          String mappedAsset = asset;
-          if (asset == "Stocks") mappedAsset = "Tech";
-          else if (asset == "Bonds") mappedAsset = "Banks";
-          // Gold stays Gold, Cash is not impacted
-
-          double multiplier = 1.0;
-          if (asset == "Cash") {
-            multiplier = 1.0; // Cash doesn't grow
-          } else {
-            multiplier = _scenario.assetImpact[mappedAsset] ?? 1.0;
-          }
+          double multiplier = _scenario.impactFor(asset);
 
           double newValue = invested * multiplier;
           double profit = newValue - invested;

@@ -52,8 +52,15 @@ class SimulationHistoryScreen extends StatelessWidget {
 
                     final double initial =
                         (data['initialCapital'] as num?)?.toDouble() ?? 0;
+                    // dividendsReceived is 0 for entries saved before this
+                    // field existed — matches the live result screen's
+                    // total (finalCapital + dividendsReceived), so a run
+                    // shown as a win/loss live can't flip when viewed here.
+                    final double dividendsReceived =
+                        (data['dividendsReceived'] as num?)?.toDouble() ?? 0;
                     final double finalCap =
-                        (data['finalCapital'] as num?)?.toDouble() ?? 0;
+                        ((data['finalCapital'] as num?)?.toDouble() ?? 0) +
+                            dividendsReceived;
                     final bool isWin = finalCap >= initial;
                     final currencyFormat = NumberFormat.simpleCurrency(
                         name: _currencyCodeForTicker(

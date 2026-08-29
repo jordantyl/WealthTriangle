@@ -39,10 +39,17 @@ class _SignupScreenState extends State<SignupScreen> {
       });
 
       if (mounted) {
+        // createUserWithEmailAndPassword() already signs the new user in —
+        // main.dart's root StreamBuilder(authStateChanges()) swaps straight
+        // to HomeScreen the instant that fires, racing (and usually beating)
+        // this screen's own Navigator.pop(). The old "Please Login" message
+        // was therefore false by the time — or before — it appeared: the
+        // user was already past login. Message now matches what actually
+        // happens; the redundant pop() (fighting a Navigator that's already
+        // being replaced) is gone rather than fixed, since the auth-state
+        // rebuild is what actually performs the transition.
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Account Created! Please Login.")));
-        // Go back to Login Screen after success
-        Navigator.pop(context);
+            const SnackBar(content: Text("Account created! Taking you to your dashboard...")));
       }
     } on FirebaseAuthException catch (e) {
       if (mounted) {

@@ -140,8 +140,15 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loginWithGoogle() async {
     setState(() => _isLoading = true);
     try {
+      // Google's native layer caches the last-picked account independently
+      // of Firebase's own session, so without this, signIn() silently
+      // re-resolves to whoever last signed in instead of showing the
+      // account picker. signOut() (not disconnect()) just clears that
+      // cached pick — it doesn't revoke the app's consent.
+      final googleSignIn = GoogleSignIn();
+      await googleSignIn.signOut();
       final GoogleSignInAccount? googleUser =
-          await GoogleSignIn().signIn().timeout(const Duration(seconds: 30));
+          await googleSignIn.signIn().timeout(const Duration(seconds: 30));
       if (googleUser == null) {
         // User cancelled the picker
         if (mounted) setState(() => _isLoading = false);

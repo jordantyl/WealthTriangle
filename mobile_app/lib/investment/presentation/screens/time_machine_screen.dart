@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
@@ -31,14 +30,28 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
   DateTime _startDate = DateTime(DateTime.now().year - 3, 1, 1);
   DateTime _endDate = DateTime.now().subtract(const Duration(days: 1));
 
+  // The candlesticks package defaults to a zoomed-in view of the most
+  // recent candles (a fixed ~6px candle width) even though every candle in
+  // the backtest range is passed to it — most of the chart is only reachable
+  // by manually pinching out. This controller lets us set the zoom
+  // programmatically so the chart opens already showing the full
+  // start-to-end range, with a button to get back to that view after the
+  // user pans/zooms around.
+  final pkg.CandlesticksController _chartController = pkg.CandlesticksController();
+  double? _lastChartWidth;
+
   bool _isLoading = false;
   String? _error;
   Map<String, dynamic>? _result;
 
   // Base URL without the /api/stock path.
-  // Add BACKEND_BASE_URL=http://10.0.2.2:5000 to your .env
-  String get _baseUrl =>
-      dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+  String get _baseUrl => defaultBackendBaseUrl;
+
+  @override
+  void dispose() {
+    _chartController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickDate(bool isStart) async {
     final picked = await showDatePicker(
@@ -82,6 +95,10 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
       _isLoading = true;
       _error = null;
       _result = null;
+      // Forces the next chart render to auto-fit again for the new data,
+      // instead of reusing whatever zoom/pan was left over from a
+      // previous run.
+      _lastChartWidth = null;
     });
 
     final fmt = DateFormat('yyyy-MM-dd');
@@ -134,6 +151,16 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
         'endDate': data['end_date'],
         'initialCapital': data['initial_capital'],
         'finalCapital': data['final_capital'],
+        // The live result screen's win/loss headline and "->" total use the
+        // dividend-inclusive total (see totalReturnProfit/dividendsReceived
+        // in _buildResultCard below), but this used to only persist the
+        // price-only finalCapital — SimulationHistoryScreen then recomputed
+        // isWin from that alone, so a run with negative price return but
+        // positive total return (dividends) could show green "you made
+        // money" live and then flip to a loss in History for the exact same
+        // run. Persist both so History can match what was actually shown.
+        'dividendsReceived': data['dividends_received'],
+        'totalReturnProfit': data['total_return_profit'],
         'cagr': data['cagr'],
         'maxDrawdown': data['max_drawdown'],
         'riskScore': data['risk_score_volatility'],
@@ -324,22 +351,57 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
     return events;
   }
 
+  // Sets the chart's zoom/pan so every candle from start to end date fits
+  // in view at once. Candle width is clamped by the package itself
+  // (MIN/MAX_CANDLE_WIDTH), so with a very long date range this gets as
+  // close to "all of it" as the package allows rather than failing outright.
+  void _fitChartToRange(int candleCount) {
+    final width = _lastChartWidth;
+    if (width == null || candleCount == 0) return;
+    _chartController.updateViewport(
+      scrollIndex: 0,
+      candleWidth: width / candleCount,
+    );
+  }
+
   Widget _buildChartSection() {
     final candles = _packageCandles();
     if (candles.length < 2) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('📈 PRICE HISTORY',
-            style: TextStyle(
-                color: Colors.amber,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1)),
+        Row(
+          children: [
+            const Text('📈 PRICE HISTORY',
+                style: TextStyle(
+                    color: Colors.amber,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1)),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.fit_screen, size: 18, color: Colors.amber),
+              tooltip: 'View whole chart',
+              constraints: const BoxConstraints(),
+              padding: EdgeInsets.zero,
+              onPressed: () => _fitChartToRange(candles.length),
+            ),
+          ],
+        ),
         const SizedBox(height: 10),
         SizedBox(
           height: 260,
-          child: pkg.Candlesticks(candles: candles),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isFirstLayout = _lastChartWidth == null;
+              _lastChartWidth = constraints.maxWidth;
+              if (isFirstLayout) {
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _fitChartToRange(candles.length));
+              }
+              return pkg.Candlesticks(candles: candles, controller: _chartController);
+            },
+          ),
         ),
       ],
     );

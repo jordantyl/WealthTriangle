@@ -36,10 +36,21 @@ class MarketRules {
     }
 
     // 🇺🇸 US / DEFAULT -> Flexible
+    //
+    // fractionalAllowed was previously true here, but PortfolioState.buyStock
+    // /sellStock (and the whole portfolio data model behind them) only ever
+    // took an `int` qty — there was no fractional-share support downstream
+    // at all. The UI advertised it anyway (decimal keypad, "2.5" accepted by
+    // validation), so a submitted fractional quantity got silently
+    // int-truncated on buy/sell while the Sell P&L preview (built with
+    // int.tryParse, which returns null for "2.5") showed $0.00 — the
+    // executed trade never matched what the user saw or asked for. Until
+    // fractional shares are actually implemented end-to-end, don't let the
+    // UI promise something the system can't deliver.
     return MarketRules(
-      minTradeQty: 1, 
-      boardLotSize: 1, 
-      fractionalAllowed: true,
+      minTradeQty: 1,
+      boardLotSize: 1,
+      fractionalAllowed: false,
       oddLotAllowed: true
     );
   }

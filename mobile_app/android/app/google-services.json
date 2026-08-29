@@ -51,6 +51,50 @@
     },
     {
       "client_info": {
+        "mobilesdk_app_id": "1:6099096342:android:060411110f7669d92cf637",
+        "android_client_info": {
+          "package_name": "com.tanyongle.wealthtriangle"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "6099096342-7cdfm02ofngppba3uk6fk5ubnr0oj6jb.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.tanyongle.wealthtriangle",
+            "certificate_hash": "4f23664cca2a582c75c9f286dc50bbbbba878375"
+          }
+        },
+        {
+          "client_id": "6099096342-8dkqt4foik9lc5e52d8hsnk6dffj155b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAY4yH4S9KtEFCAxqd4s6f7faC95SwXYL4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "6099096342-8dkqt4foik9lc5e52d8hsnk6dffj155b.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "6099096342-e98ets8353jjtmjpjngs7lfoos44lu5e.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.tylj"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:6099096342:android:55c933955492f73d2cf637",
         "android_client_info": {
           "package_name": "com.tyljordan.wealthtriangle"

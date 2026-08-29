@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -64,6 +65,11 @@ class PortfolioItem {
   // estimate in that case so a fetch failure never zeroes out the number.
   final int dividendFrequencyPerYear;
   final double projectedAnnualDividendPerShare;
+  // Estimated per-share dividend still to come this calendar year — see
+  // DividendHistory.remainingThisYearPerShare. 0.0 whenever
+  // dividendFrequencyPerYear is 0 (no real history to estimate from).
+  final double remainingThisYearPerShare;
+  final List<UpcomingDividendPayment> upcomingPayments;
 
   PortfolioItem({
     required this.ticker, required this.quantity, required this.avgPrice, required this.currency,
@@ -74,6 +80,8 @@ class PortfolioItem {
     this.dividendYield = 0.0,
     this.dividendFrequencyPerYear = 0,
     this.projectedAnnualDividendPerShare = 0.0,
+    this.remainingThisYearPerShare = 0.0,
+    this.upcomingPayments = const [],
   });
 
   double get totalValue => quantity * (currentMarketPrice > 0 ? currentMarketPrice : avgPrice);
@@ -88,6 +96,8 @@ class PortfolioItem {
     }
     return totalValue * (dividendYield / 100);
   }
+
+  double get remainingDividendThisYear => quantity * remainingThisYearPerShare;
 
   bool get usesRealDividendHistory => dividendFrequencyPerYear > 0;
 
@@ -134,6 +144,23 @@ class DividendBreakdownItem {
   });
 }
 
+/// One flattened, quantity-scaled upcoming payment row for the Passive
+/// Income screen — a holding can contribute more than one of these (e.g. a
+/// quarterly payer with 2 remaining slots this year).
+class UpcomingDividendRow {
+  final String ticker;
+  final DateTime expectedDate;
+  final double amountPerShare;
+  final double totalAmount;
+
+  const UpcomingDividendRow({
+    required this.ticker,
+    required this.expectedDate,
+    required this.amountPerShare,
+    required this.totalAmount,
+  });
+}
+
 class PendingTrade {
   final String ticker;
   final int qty;
@@ -164,6 +191,26 @@ class PortfolioState extends ChangeNotifier {
 
   double get totalAnnualDividendIncome =>
       holdings.fold(0.0, (total, item) => total + item.annualDividendIncome);
+
+  double get totalRemainingDividendThisYear =>
+      holdings.fold(0.0, (total, item) => total + item.remainingDividendThisYear);
+
+  // Every holding's estimated upcoming payment(s), flattened and sorted by
+  // date — drives the Passive Income screen's "Upcoming Dividends" list.
+  List<UpcomingDividendRow> get upcomingDividendPayments {
+    final rows = <UpcomingDividendRow>[
+      for (final h in holdings)
+        for (final p in h.upcomingPayments)
+          UpcomingDividendRow(
+            ticker: h.ticker,
+            expectedDate: p.expectedDate,
+            amountPerShare: p.amountPerShare,
+            totalAmount: p.amountPerShare * h.quantity,
+          ),
+    ];
+    rows.sort((a, b) => a.expectedDate.compareTo(b.expectedDate));
+    return rows;
+  }
 
   List<Transaction> _transactions = [];
   List<Transaction> get transactions => _transactions;
@@ -205,10 +252,22 @@ class PortfolioState extends ChangeNotifier {
     return "Aggressive 🚀";
   }
 
+  StreamSubscription<User?>? _authSub;
+  StreamSubscription<QuerySnapshot>? _holdingsSub;
+  StreamSubscription<QuerySnapshot>? _historySub;
+
   void _initRealtimeListeners() {
-    FirebaseAuth.instance.authStateChanges().listen((user) {
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      // Cancel any listeners from a previous signed-in user first —
+      // authStateChanges can fire more than once per app session (sign out
+      // then back in), and without this, each firing stacked another pair
+      // of live Firestore listeners on top of the last instead of
+      // replacing them.
+      _holdingsSub?.cancel();
+      _historySub?.cancel();
+
       if (user != null) {
-        _holdingsRef!.snapshots().listen((snapshot) {
+        _holdingsSub = _holdingsRef!.snapshots().listen((snapshot) {
           _holdings = snapshot.docs.map((doc) {
             return PortfolioItem.fromFirestore(doc.data() as Map<String, dynamic>);
           }).toList();
@@ -216,7 +275,7 @@ class PortfolioState extends ChangeNotifier {
           notifyListeners();
         });
 
-        _historyRef!.orderBy('date', descending: true).snapshots().listen((snapshot) {
+        _historySub = _historyRef!.orderBy('date', descending: true).snapshots().listen((snapshot) {
           _transactions = snapshot.docs.map((doc) {
             return Transaction.fromFirestore(doc.data() as Map<String, dynamic>);
           }).toList();
@@ -228,6 +287,20 @@ class PortfolioState extends ChangeNotifier {
         notifyListeners();
       }
     });
+  }
+
+  // Was missing entirely — none of the three subscriptions above were ever
+  // canceled, so tearing down this notifier while a user was signed in
+  // (e.g. a widget-tree rebuild) left the Firestore listeners running
+  // against a disposed ChangeNotifier. The next snapshot to arrive called
+  // notifyListeners() on it and threw ("used after being disposed"),
+  // confirmed live via the integration test harness rebuilding app.main().
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    _holdingsSub?.cancel();
+    _historySub?.cancel();
+    super.dispose();
   }
 
   // ✅ FIXED: Concurrent fetching with Future.wait
@@ -253,6 +326,8 @@ class PortfolioState extends ChangeNotifier {
           dividendYield: result.dividendYield,
           dividendFrequencyPerYear: divHistory.frequencyPerYear,
           projectedAnnualDividendPerShare: divHistory.projectedAnnualPerShare,
+          remainingThisYearPerShare: divHistory.remainingThisYearPerShare,
+          upcomingPayments: divHistory.upcomingPayments,
         );
       } catch (e) {
         print("Failed to refresh ${item.ticker}: $e");

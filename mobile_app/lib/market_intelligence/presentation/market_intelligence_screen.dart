@@ -20,24 +20,37 @@ class MarketIntelligenceScreen extends StatefulWidget {
 }
 
 class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
-  // Tickers the user actually holds in their portfolio — prioritized ahead
-  // of watchlistTickers (see MarketIntelligenceState.loadNews). Same
-  // pattern as event_calendar_screen.dart's _heldTickers getter.
-  List<String> get _heldTickers => Provider.of<PortfolioState>(context, listen: false)
-      .holdings
-      .map((h) => h.ticker)
-      .toList();
+  // Held tickers this screen's last news fetch was scoped to — compared
+  // against the live portfolio on every build (see build()) so a holding
+  // that hadn't loaded yet when initState() first fired (PortfolioState's
+  // Firestore snapshot is async and can easily lose that race) still gets
+  // picked up as soon as it does, instead of being permanently missing
+  // from the feed until the user manually refreshes.
+  List<String> _fetchedHeldTickers = [];
 
-  void _load() {
+  List<String> _heldTickersFrom(PortfolioState portfolio) =>
+      portfolio.holdings.map((h) => h.ticker).toList();
+
+  void _load(List<String> heldTickers) {
+    _fetchedHeldTickers = heldTickers;
     Provider.of<MarketIntelligenceState>(context, listen: false)
-        .loadNews(widget.watchlistTickers, heldTickers: _heldTickers);
+        .loadNews(widget.watchlistTickers, heldTickers: heldTickers);
+  }
+
+  bool _sameTickers(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   @override
   void initState() {
     super.initState();
     // Fetch data using Provider on load
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _load(_heldTickersFrom(Provider.of<PortfolioState>(context, listen: false))));
   }
 
   @override
@@ -45,6 +58,14 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
     // Listen to the Application State
     final state = Provider.of<MarketIntelligenceState>(context);
     final colors = context.appColors;
+
+    // Watching PortfolioState (not listen: false) so this rebuilds once the
+    // holdings snapshot actually arrives — re-fetching then if it differs
+    // from what the last fetch was scoped to.
+    final currentHeldTickers = _heldTickersFrom(Provider.of<PortfolioState>(context));
+    if (!_sameTickers(currentHeldTickers, _fetchedHeldTickers)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _load(currentHeldTickers));
+    }
 
     return Scaffold(
       backgroundColor: colors.background,
@@ -55,14 +76,18 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.refresh, color: colors.textSecondary),
-            onPressed: _load,
+            onPressed: () => _load(currentHeldTickers),
           ),
         ],
       ),
       body: Column(
         children: [
           if (state.isMockNews) _buildDemoDataBanner(),
-          _buildHeldOnlyToggle(state),
+          _buildScopeSelector(state),
+          if (state.tickersForCurrentScope.isNotEmpty) ...[
+            _buildTickerChips(state),
+            const SizedBox(height: 8),
+          ],
           _buildSentimentFilterBar(state),
           _buildMarketPulseHeader(state),
           Expanded(
@@ -104,13 +129,22 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
 
   Widget _buildMarketPulseHeader(MarketIntelligenceState state) {
     final colors = context.appColors;
-    final bullishCount = state.articles
+    // Scoped to articlesInScope (not the raw state.articles) so this
+    // reflects whichever scope/ticker filter is currently selected — it
+    // used to always show the full unfiltered feed's counts, making it
+    // look identical across All/Watchlist/Holdings. Deliberately not using
+    // filteredArticles here since that also applies the sentiment sub-tab,
+    // which would zero out two of the three counts whenever a sentiment
+    // other than "All" is selected.
+    final scopedArticles = state.articlesInScope;
+    final bullishCount = scopedArticles
         .where((a) => a.sentiment == SentimentLabel.bullish)
         .length;
-    final bearishCount = state.articles
+    final bearishCount = scopedArticles
         .where((a) => a.sentiment == SentimentLabel.bearish)
         .length;
-    final total = state.articles.where((a) => a.sentiment != null).length;
+    final total = scopedArticles.where((a) => a.sentiment != null).length;
+    final neutralCount = total - bullishCount - bearishCount;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -138,20 +172,34 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
               const SizedBox(width: 8),
               _buildPulseChip('Bearish', bearishCount, const Color(0xFFE53935)),
               const SizedBox(width: 8),
-              _buildPulseChip('Neutral', total - bullishCount - bearishCount,
-                  const Color(0xFF607D8B)),
+              _buildPulseChip('Neutral', neutralCount, const Color(0xFF607D8B)),
             ],
           ),
           if (total > 0) ...[
             const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: total > 0 ? bullishCount / total : 0,
-                backgroundColor: const Color(0xFFE53935),
-                valueColor:
-                    const AlwaysStoppedAnimation<Color>(Color(0xFF4CAF50)),
-                minHeight: 6,
+              child: SizedBox(
+                height: 6,
+                child: Row(
+                  children: [
+                    if (bullishCount > 0)
+                      Expanded(
+                        flex: bullishCount,
+                        child: Container(color: const Color(0xFF4CAF50)),
+                      ),
+                    if (neutralCount > 0)
+                      Expanded(
+                        flex: neutralCount,
+                        child: Container(color: const Color(0xFF607D8B)),
+                      ),
+                    if (bearishCount > 0)
+                      Expanded(
+                        flex: bearishCount,
+                        child: Container(color: const Color(0xFFE53935)),
+                      ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 4),
@@ -198,34 +246,104 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
     );
   }
 
-  // The "market filter" — narrows the feed down to articles about tickers
-  // the user actually holds (article.isHeld), vs everything on the
-  // watchlist. The isHeld data already existed for the "📌 Held" badge and
-  // held-first sort; this is the first place it's exposed as a filter.
-  Widget _buildHeldOnlyToggle(MarketIntelligenceState state) {
+  // Scope selector — Watchlist and Holdings are independent sets (a ticker
+  // can be one, the other, both, or neither), so this replaced a single
+  // "Held tickers only" checkbox that could only express one of them.
+  Widget _buildScopeSelector(MarketIntelligenceState state) {
     final colors = context.appColors;
+    const scopes = [
+      (NewsScope.all, 'All', Icons.dynamic_feed),
+      (NewsScope.watchlist, 'Watchlist', Icons.visibility_outlined),
+      (NewsScope.holdings, 'Holdings', Icons.pie_chart_outline),
+    ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: GestureDetector(
-        onTap: () => state.setHeldOnly(!state.heldOnly),
-        child: Row(
-          children: [
-            Icon(
-              state.heldOnly ? Icons.check_box : Icons.check_box_outline_blank,
-              size: 18,
-              color: state.heldOnly ? const Color(0xFFFFA726) : colors.textTertiary,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'Held tickers only',
-              style: TextStyle(
-                color: state.heldOnly ? const Color(0xFFFFA726) : colors.textSecondary,
-                fontSize: 13,
-                fontWeight: state.heldOnly ? FontWeight.w600 : FontWeight.normal,
+      child: Row(
+        children: [
+          for (final (value, label, icon) in scopes) ...[
+            Expanded(
+              child: GestureDetector(
+                onTap: () => state.setScope(value),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: state.scope == value ? const Color(0xFFFFA726) : colors.surface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: state.scope == value ? const Color(0xFFFFA726) : colors.border,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(icon,
+                          size: 16,
+                          color: state.scope == value ? Colors.white : colors.textSecondary),
+                      const SizedBox(height: 2),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: state.scope == value ? Colors.white : colors.textSecondary,
+                          fontSize: 11,
+                          fontWeight: state.scope == value ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
+            if (value != NewsScope.holdings) const SizedBox(width: 8),
           ],
-        ),
+        ],
+      ),
+    );
+  }
+
+  // Narrows further to specific ticker(s) within the current scope.
+  // Selecting one re-fetches scoped to just the picked tickers (see
+  // MarketIntelligenceState.loadNewsForTickers) so it isn't at the mercy of
+  // the backend's first-5-tickers cap when the full list is longer than that.
+  Widget _buildTickerChips(MarketIntelligenceState state) {
+    final colors = context.appColors;
+    final tickers = state.tickersForCurrentScope;
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        scrollDirection: Axis.horizontal,
+        itemCount: tickers.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final ticker = tickers[i].toUpperCase();
+          final isSelected = state.selectedTickers.contains(ticker);
+          return GestureDetector(
+            onTap: () {
+              final next = Set<String>.from(state.selectedTickers);
+              isSelected ? next.remove(ticker) : next.add(ticker);
+              state.loadNewsForTickers(next);
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected ? const Color(0xFF1E88E5) : colors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isSelected ? const Color(0xFF1E88E5) : colors.border,
+                ),
+              ),
+              child: Text(
+                ticker,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : colors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -272,7 +390,8 @@ class _MarketIntelligenceScreenState extends State<MarketIntelligenceScreen> {
   Widget _buildNewsFeed(MarketIntelligenceState state) {
     final colors = context.appColors;
     return RefreshIndicator(
-      onRefresh: () async => _load(),
+      onRefresh: () async =>
+          _load(_heldTickersFrom(Provider.of<PortfolioState>(context, listen: false))),
       color: const Color(0xFF1E88E5),
       backgroundColor: colors.surface,
       child: ListView.builder(

@@ -1,7 +1,7 @@
 name: wealth_triangle
 description: An investment simulation app.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -31,10 +31,12 @@ dependencies:
     path: packages/flutter_overlay_window     # vendored + patched, see packages/flutter_overlay_window/PATCH.md
   speech_to_text: ^7.4.0                     # voice input for floating assistant
   permission_handler: ^11.3.1                # mic/camera permission requests
-uuid: ^4.3.3
+  uuid: ^4.3.3
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
   flutter_lints: ^2.0.0
   flutter_launcher_icons: ^0.14.3
@@ -54,5 +56,23 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
-    - lib/.env
+    # lib/.env deliberately NOT bundled here — it used to be, which meant the
+    # real BACKEND_API_KEY shipped in plaintext inside every distributed
+    # APK/AAB (readable with a plain `unzip`). Release builds now get their
+    # values via --dart-define instead; see dartdefines.example.json and
+    # main.dart.
+    #
+    # This previously (incorrectly) said a local lib/.env "still works for
+    # flutter run during day-to-day development" — it does not, for any
+    # build mode, on any platform. flutter_dotenv's dotenv.load() reads
+    # through Flutter's asset bundle (rootBundle), which is built from
+    # exactly this `assets:` list regardless of debug/profile/release, so
+    # removing lib/.env from here broke local `flutter run`/`flutter build
+    # apk --debug` too, not just release. That silently sent an EMPTY
+    # X-API-Key header on every local run, which backend/app.py's global
+    # `_require_api_key()` before_request hook rejected with a 401 before
+    # any route ever ran — misdiagnosed for a full day (2026-08-28/29) as a
+    # Firebase-auth/emulator/Play-Services problem before being root-caused
+    # here. For local development, pass --dart-define-from-file=dartdefines.json
+    # (same file the release build flag uses) — see mobile_app/dartdefines.example.json.
     - assets/icon/logo_icon.png

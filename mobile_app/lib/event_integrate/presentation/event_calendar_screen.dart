@@ -5,7 +5,6 @@ import '../application/event_intelligence_state.dart';
 import '../domain/economic_event.dart';
 import '../../investment/application/portfolio_state.dart';
 import '../../shared/app_theme_colors.dart';
-import 'export_report_screen.dart';
 import 'add_liquidity_event.dart';
 
 
@@ -73,18 +72,6 @@ class _EventCalendarScreenState extends State<EventCalendarScreen>
               if (mounted) _reloadData();
             },
             tooltip: 'Add Liquidity Event',
-          ),
-          IconButton(
-            icon: Icon(Icons.file_download_outlined, color: colors.textSecondary),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ExportReportScreen(
-                  userId: widget.userId,
-                  service: state.api,
-                ),
-              ),
-            ),
           ),
           IconButton(
             icon: Icon(Icons.refresh, color: colors.textSecondary),
@@ -467,15 +454,27 @@ class _EventCalendarScreenState extends State<EventCalendarScreen>
   }
 
   Future<void> _toggleAlert(EconomicEvent event, EventIntegrationState state) async {
-    await state.toggleAlert(widget.userId, event);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(event.isAlertEnabled ? '🔔 Alert set for ${event.title}' : '🔕 Alert removed for ${event.title}'),
-          backgroundColor: context.appColors.surface,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+    try {
+      await state.toggleAlert(widget.userId, event);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(event.isAlertEnabled ? '🔔 Alert set for ${event.title}' : '🔕 Alert removed for ${event.title}'),
+            backgroundColor: context.appColors.surface,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't update the alert — check your connection and try again."),
+            backgroundColor: Color(0xFFE53935),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 }

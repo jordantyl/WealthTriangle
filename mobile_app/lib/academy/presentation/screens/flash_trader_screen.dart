@@ -38,6 +38,7 @@ class _FlashTraderScreenState extends State<FlashTraderScreen> {
     if (scenarios.isNotEmpty) {
       setState(() {
         _currentScenario = scenarios[Random().nextInt(scenarios.length)];
+        _decided = false;
         _startTimer(); // Restart the clock
       });
     }
@@ -63,8 +64,11 @@ class _FlashTraderScreenState extends State<FlashTraderScreen> {
     });
   }
 
+  bool _decided = false;
+
   void _handleDecision(bool? bought) {
-    if (_currentScenario == null) return;
+    if (_currentScenario == null || _decided) return;
+    _decided = true;
     _timer?.cancel();
 
     // If bought is null, it means Timeout

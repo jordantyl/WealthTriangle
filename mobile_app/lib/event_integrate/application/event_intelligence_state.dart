@@ -146,11 +146,21 @@ class EventIntegrationState extends ChangeNotifier {
   Future<void> toggleAlert(String userId, EconomicEvent event) async {
     if (event.isUserCreated) return;
 
-    final newState = !event.isAlertEnabled;
-    event.isAlertEnabled = newState;
+    final previousState = event.isAlertEnabled;
+    event.isAlertEnabled = !previousState;
     notifyListeners();
 
-    await _api.toggleEventAlert(userId, event, newState);
+    try {
+      await _api.toggleEventAlert(userId, event, !previousState);
+    } catch (e) {
+      // Roll back the optimistic flip — without this, a failed write (e.g.
+      // offline, or a rejected Firestore permission) left the bell icon
+      // showing "enabled" forever even though nothing was actually saved,
+      // with no error shown anywhere (this call was previously unguarded).
+      event.isAlertEnabled = previousState;
+      notifyListeners();
+      rethrow;
+    }
   }
 
   EventIntegrationService get api => _api;

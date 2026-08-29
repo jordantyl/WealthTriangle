@@ -12,6 +12,7 @@ import 'user/application/wealth_state.dart';
 import 'user/application/theme_service.dart'; // NEW IMPORT
 import 'user/presentation/screens/login_screen.dart';
 import 'user/presentation/screens/profile_screen.dart';
+import 'user/presentation/screens/home_screen.dart';
 
 import 'academy/presentation/screens/academy_screen.dart';
 import 'academy/presentation/screens/paper_trading_screen.dart';
@@ -56,7 +57,29 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-    await dotenv.load(fileName: "lib/.env");
+    // lib/.env is no longer a bundled asset (see pubspec.yaml) — bundling it
+    // meant the real BACKEND_API_KEY value shipped, in plaintext, inside
+    // every distributed APK, readable via a plain `unzip`. Release builds
+    // now get their values from --dart-define instead (backend_headers.dart,
+    // stock_api.dart).
+    //
+    // This load() ALWAYS fails silently now, for every build mode, not just
+    // release — dotenv.load() reads through the Flutter asset bundle
+    // (rootBundle), which only contains what pubspec.yaml's `assets:` list
+    // declares, regardless of debug/profile/release. Removing lib/.env from
+    // that list broke local `flutter run`/`flutter build apk --debug` too,
+    // not just release builds, silently falling through to an empty
+    // BACKEND_API_KEY on every local run — misdiagnosed for a full day
+    // (2026-08-28/29) as a Firebase-auth/emulator problem before being
+    // root-caused to this. For local development, run with
+    // --dart-define-from-file=dartdefines.json (see dartdefines.example.json)
+    // so BACKEND_API_KEY is actually populated, same as admin_main.dart
+    // already requires.
+    try {
+      await dotenv.load(fileName: "lib/.env");
+    } catch (_) {
+      dotenv.loadFromString(isOptional: true);
+    }
 
     // Android only — the floating assistant bubble uses a
     // SYSTEM_ALERT_WINDOW overlay, which has no web/iOS equivalent.
@@ -152,7 +175,19 @@ class WealthTriangleApp extends StatelessWidget {
             // --- 3. ACTIVE MODE ---
             themeMode: themeService.isDarkMode ? ThemeMode.dark : ThemeMode.light,
             
-            home: const LoginScreen(),
+            // Restores an already-signed-in session on relaunch instead of
+            // always showing the login form — Firebase Auth persists the
+            // session to local storage on its own, this just has to check
+            // it. Same pattern as admin_app.dart's AdminApp.
+            home: StreamBuilder<User?>(
+              stream: FirebaseAuth.instance.authStateChanges(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Scaffold(body: Center(child: CircularProgressIndicator()));
+                }
+                return snapshot.data == null ? const LoginScreen() : const HomeScreen();
+              },
+            ),
             routes: {
               // The Keys must match the 'route' strings in home_screen.dart
               '/investment': (context) => const StockDashboard(), // Assumes class name is StockScreen

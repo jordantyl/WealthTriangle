@@ -20,7 +20,7 @@ class InvestRecommendationCard extends StatelessWidget {
     final wealth = Provider.of<WealthState>(context);
 
     final profile = portfolio.investorType; // e.g. "Conservative 🛡️"
-    final rec = _recommendationFor(profile, wealth.trianglePreference);
+    final rec = _recommendationFor(profile, wealth.trianglePreference, wealth.preferredSectors);
 
     return Container(
       width: double.infinity,
@@ -76,7 +76,8 @@ class InvestRecommendationCard extends StatelessWidget {
     );
   }
 
-  _Rec _recommendationFor(String profile, TrianglePreference pref) {
+  _Rec _recommendationFor(
+      String profile, TrianglePreference pref, List<String> preferredSectors) {
     // Base recommendation by classified risk profile
     _Rec rec;
     if (profile.startsWith("Conservative")) {
@@ -146,6 +147,13 @@ class InvestRecommendationCard extends StatelessWidget {
         break;
       case TrianglePreference.balanced:
         break;
+    }
+
+    // Nudge based on the sectors picked in Profile > Preferred Sectors —
+    // otherwise that input is stored but never actually shapes anything.
+    if (preferredSectors.isNotEmpty) {
+      rec.suggestions.add(
+          "You've flagged interest in ${preferredSectors.join(', ')}: prioritize screening KLCI/US names in ${preferredSectors.length > 1 ? 'these sectors' : 'this sector'} first when searching in Investment Lab.");
     }
 
     return rec;

@@ -7,7 +7,7 @@ class MarketScenario {
   final Map<String, double> assetImpact; 
   final String aiFeedback; // The lesson to learn
 
-  MarketScenario({ 
+  MarketScenario({
     required this.id,
     required this.title,
     required this.newsHeadline,
@@ -15,6 +15,20 @@ class MarketScenario {
     required this.assetImpact,
     required this.aiFeedback,
   });
+
+  // Tycoon Battle's "Permanent Portfolio" options (Stocks/Bonds/Gold/Cash)
+  // don't match this scenario data's sector keys (Tech/Airlines/Gold/Oil/Banks),
+  // so battle code maps between them here. Single source of truth so the
+  // battle results preview and the actual cash settlement never diverge.
+  double impactFor(String battleAsset) {
+    if (battleAsset == "Cash") return 1.0; // Cash doesn't grow or shrink
+    String mappedAsset = switch (battleAsset) {
+      "Stocks" => "Tech",
+      "Bonds" => "Banks",
+      _ => battleAsset, // Gold stays Gold
+    };
+    return assetImpact[mappedAsset] ?? 1.0;
+  }
 }
 
 // Example Data

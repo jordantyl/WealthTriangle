@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  All backend/API traffic (Render, Firebase, Yahoo Finance via the proxy,
+  Gemini/OpenAI via the proxy) is HTTPS-only already — this just makes that
+  a platform-enforced guarantee instead of an implicit one, so a future
+  accidental http:// URL fails loudly at request time instead of silently
+  working in plaintext.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

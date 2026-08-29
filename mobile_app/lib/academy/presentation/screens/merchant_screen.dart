@@ -45,12 +45,20 @@ class _MerchantScreenState extends State<MerchantScreen> {
     // being a near-guaranteed loss.
     double targetAmount = state.maxTurns > 20 ? 1000000 : 20000;
 
-    // ✅ FIXED: Inventory valuation using currentPrice
+    // Inventory valuation: today's rotation only has 5 of the 12 possible
+    // items, so an owned item can easily not be for sale today. Previously
+    // that meant it contributed $0 to net worth — including on the final
+    // turn, which decides the win condition — even though the player
+    // genuinely owns it and paid real money for it. Fall back to the price
+    // it last actually traded at (lastKnownPrices) instead of dropping it.
     double inventoryValue = 0;
     state.inventory.forEach((key, qty) {
-      if (state.marketItems.any((i) => i.id == key)) {
-        var item = state.marketItems.firstWhere((i) => i.id == key);
-        inventoryValue += item.currentPrice * qty; // ✅ NOW USING CURRENT PRICE
+      final inTodaysMarket = state.marketItems.where((i) => i.id == key);
+      final price = inTodaysMarket.isNotEmpty
+          ? inTodaysMarket.first.currentPrice
+          : state.lastKnownPrices[key];
+      if (price != null) {
+        inventoryValue += price * qty;
       }
     });
     double netWorth = state.merchantCash + inventoryValue;

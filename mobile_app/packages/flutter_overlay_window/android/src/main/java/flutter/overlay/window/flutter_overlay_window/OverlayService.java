@@ -376,14 +376,34 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     @Override
     public boolean onTouch(View view, MotionEvent event) {
-        if (windowManager != null && WindowSetup.enableDrag) {
+        if (windowManager == null) return false;
+
+        // lastX/lastY are tracked on every DOWN/MOVE regardless of
+        // WindowSetup.enableDrag (only the actual position mutation below is
+        // gated by it) — see PATCH.md's second entry. The app toggles
+        // enableDrag on/off mid-gesture (drag is only meant to be live while
+        // a finger is actually on a specific drag-handle widget), and if
+        // lastX/lastY are only ever set while enableDrag is already true, the
+        // DOWN event that happens *before* the Dart side's async call flips
+        // it true is silently skipped — so the first MOVE processed once
+        // dragging is enabled computes its delta against a stale (or default
+        // 0,0) origin instead of the real touch start, producing a huge
+        // one-frame jump instead of a smooth drag.
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            dragging = false;
+            lastX = event.getRawX();
+            lastY = event.getRawY();
+            return false;
+        }
+        if (event.getAction() == MotionEvent.ACTION_MOVE && !WindowSetup.enableDrag) {
+            lastX = event.getRawX();
+            lastY = event.getRawY();
+            return false;
+        }
+
+        if (WindowSetup.enableDrag) {
             WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
             switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    dragging = false;
-                    lastX = event.getRawX();
-                    lastY = event.getRawY();
-                    break;
                 case MotionEvent.ACTION_MOVE:
                     float dx = event.getRawX() - lastX;
                     float dy = event.getRawY() - lastY;
@@ -402,16 +422,13 @@ public class OverlayService extends Service implements View.OnTouchListener {
                     int yy = params.y + ((int) dy * (invertY ? -1 : 1));
                     params.x = xx;
                     params.y = yy;
-                    if (windowManager != null) {
-                        windowManager.updateViewLayout(flutterView, params);
-                    }
+                    windowManager.updateViewLayout(flutterView, params);
                     dragging = true;
                     break;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     lastYPosition = params.y;
                     if (!WindowSetup.positionGravity.equals("none")) {
-                        if (windowManager == null) return false;
                         windowManager.updateViewLayout(flutterView, params);
                         mTrayTimerTask = new TrayAnimationTimerTask();
                         mTrayAnimationTimer = new Timer();
@@ -421,7 +438,6 @@ public class OverlayService extends Service implements View.OnTouchListener {
                 default:
                     return false;
             }
-            return false;
         }
         return false;
     }

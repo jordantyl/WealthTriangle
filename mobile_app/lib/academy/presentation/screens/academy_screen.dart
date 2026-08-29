@@ -13,37 +13,91 @@ import '../../../shared/app_theme_colors.dart';
 class AcademyScreen extends StatelessWidget {
   const AcademyScreen({super.key});
 
+  Future<void> _confirmResetToDefaults(BuildContext context) async {
+    final colors = context.appColors;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: colors.surface,
+        title: Text('Reset all academy content?', style: TextStyle(color: colors.textPrimary)),
+        content: Text(
+          'This overwrites scenarios, quizzes, flashcards, and trade items/events back to '
+          'the app\'s built-in defaults — any edits made in the Admin panel will be lost. '
+          'This can\'t be undone.',
+          style: TextStyle(color: colors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('CANCEL', style: TextStyle(color: colors.textTertiary)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('RESET', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text("Resetting to defaults...")));
+    try {
+      await Provider.of<AcademyState>(context, listen: false).seedDatabase();
+      messenger.showSnackBar(const SnackBar(
+          content: Text("✅ Reset to defaults successfully.")));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(
+          content: Text("❌ Reset failed: $e"),
+          backgroundColor: Colors.redAccent));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Listen so the Rank header updates when XP/level changes
     final state = Provider.of<AcademyState>(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Investor Academy")),
+      appBar: AppBar(
+        title: const Text("Investor Academy"),
+        // Academy content (quizzes/scenarios/flashcards/trade items) is
+        // fetched once per app session (AcademyState's constructor) and
+        // cached — an admin deleting/editing content in the Admin panel
+        // doesn't push to already-open sessions, so without this, a session
+        // that was open before the edit keeps showing stale content until
+        // the app is fully restarted. This re-fetches on demand instead.
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: "Refresh content",
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              await state.fetchGameContent();
+              messenger.showSnackBar(
+                  const SnackBar(content: Text("Academy content refreshed.")));
+            },
+          ),
+        ],
+      ),
 
       // Only shown once /api/admin/status confirms this user is in the
       // backend's ADMIN_UIDS allowlist — previously showed to every user and
       // only failed (403) after tapping it.
+      //
+      // This calls the same AcademyState.seedDatabase() as the Admin panel's
+      // "Reset to Defaults" button (admin_content_tab.dart) — it overwrites
+      // ALL academy content back to the app's built-in defaults, wiping any
+      // custom edits. Labeled/confirmed to match, since this one sits on the
+      // regular app screen where an accidental tap is far more likely than
+      // in the gated Admin panel.
       floatingActionButton: state.isAdmin
           ? FloatingActionButton.extended(
-              label: const Text("Update Database"),
-              icon: const Icon(Icons.cloud_upload),
+              label: const Text("Reset to Defaults"),
+              icon: const Icon(Icons.restart_alt),
               backgroundColor: Colors.redAccent,
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                messenger.showSnackBar(
-                    const SnackBar(content: Text("Syncing game content...")));
-                try {
-                  await Provider.of<AcademyState>(context, listen: false)
-                      .seedDatabase();
-                  messenger.showSnackBar(const SnackBar(
-                      content: Text("✅ Database synced successfully.")));
-                } catch (e) {
-                  messenger.showSnackBar(SnackBar(
-                      content: Text("❌ Sync failed: $e"),
-                      backgroundColor: Colors.redAccent));
-                }
-              },
+              onPressed: () => _confirmResetToDefaults(context),
             )
           : null,
 

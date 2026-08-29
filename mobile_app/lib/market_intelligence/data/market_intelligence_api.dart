@@ -1,14 +1,10 @@
 import 'dart:convert';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import '../domain/news_article.dart';
 import '../../shared/backend_headers.dart';
 
 class MarketIntelligenceService {
-  // ✅ SECURITY FIX: OpenAI + RapidAPI keys removed from the app.
-  // Everything goes through your Flask backend now.
-  static String get _baseUrl =>
-      dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+  static String get _baseUrl => defaultBackendBaseUrl;
 
   // Set right before returning, by both requestAISummary() and
   // fetchWatchlistNews(), so callers (and the UI) can tell fallback demo

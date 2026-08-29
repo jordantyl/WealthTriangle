@@ -184,7 +184,7 @@ class CashFlowScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label, style: TextStyle(color: colors.textSecondary, fontSize: 11)),
-                Text('\$${value.toStringAsFixed(0)}',
+                Text('\$${value.toStringAsFixed(2)}',
                     style: TextStyle(color: colors.textPrimary, fontSize: 13, fontWeight: FontWeight.bold)),
               ],
             ),

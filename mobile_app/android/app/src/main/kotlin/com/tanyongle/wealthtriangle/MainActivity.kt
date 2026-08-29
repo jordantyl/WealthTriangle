@@ -1,4 +1,4 @@
-package com.example.wealth_triangle
+package com.tanyongle.wealthtriangle
 
 import io.flutter.embedding.android.FlutterActivity
 

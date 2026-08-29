@@ -16,6 +16,9 @@ class NewsArticle {
   // MarketIntelligenceState.loadNews() — not persisted. Same pattern as
   // EconomicEvent.isHeld in event_integrate/domain/economic_event.dart.
   bool isHeld;
+  // Whether relatedTicker is on the user's watchlist. Independent of
+  // isHeld — a ticker can be held without being watchlisted, or vice versa.
+  bool isWatchlisted;
 
   NewsArticle({
     required this.id,
@@ -31,6 +34,7 @@ class NewsArticle {
     this.triangleHint, // ✅ NEW
     this.isLoadingSummary = false,
     this.isHeld = false,
+    this.isWatchlisted = false,
   });
 
   factory NewsArticle.fromJson(Map<String, dynamic> json) {

@@ -3,8 +3,6 @@ import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../application/theme_service.dart';
-import '../../../investment/domain/brokerage_connector.dart';
-import '../../../investment/data/demo_brokerage_connector.dart';
 import 'login_screen.dart';
 import 'forget_password_screen.dart';
 import '../../../floating_assistant/floating_assistant_launcher.dart';
@@ -21,11 +19,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationsEnabled = true;
-
-  // FR 7.4: REST-ready brokerage connection point (see BrokerageConnector).
-  final BrokerageConnector _broker = DemoBrokerageConnector();
-  bool _brokerConnected = false;
-  bool _brokerConnecting = false;
 
   bool _floatingAssistantEnabled = false;
   bool _floatingAssistantBusy = false;
@@ -70,21 +63,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _connectBroker() async {
-    setState(() => _brokerConnecting = true);
-    final ok = await _broker.connect();
+  // Force-closes and relaunches the overlay at its default position/size —
+  // a guaranteed recovery path reachable from the main app regardless of
+  // whether the overlay itself is currently draggable/visible, for the case
+  // where it's ended up stranded off-screen (see _collapse()'s comment in
+  // overlay_main.dart for why that can happen).
+  Future<void> _resetFloatingAssistant() async {
+    setState(() => _floatingAssistantBusy = true);
+    await FloatingAssistantLauncher.stop();
+    final restarted = await FloatingAssistantLauncher.requestPermissionsAndStart();
     if (!mounted) return;
     setState(() {
-      _brokerConnected = ok;
-      _brokerConnecting = false;
+      _floatingAssistantEnabled = restarted;
+      _floatingAssistantBusy = false;
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(ok
-            ? 'Connected to ${_broker.brokerName}'
-            : 'Could not connect to ${_broker.brokerName}'),
-        backgroundColor: ok ? Colors.green : Colors.redAccent,
-      ),
+      SnackBar(content: Text(restarted ? 'Bubble reset.' : 'Could not restart the bubble.')),
     );
   }
 
@@ -186,31 +180,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onChanged: _floatingAssistantBusy ? null : _setFloatingAssistant,
             ),
           ),
-          const SizedBox(height: 20),
-
-          // ---------- BROKERAGE (FR 7.4) ----------
-          _sectionLabel("BROKERAGE"),
-          Card(
-            child: ListTile(
-              leading: Icon(
-                _brokerConnected ? Icons.link : Icons.link_off,
-                color: _brokerConnected ? Colors.greenAccent : Colors.grey,
+          if (_floatingAssistantEnabled) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.center_focus_strong, color: Colors.deepPurpleAccent),
+                title: const Text("Reset bubble position"),
+                subtitle: const Text("If the bubble ever gets stuck off-screen"),
+                onTap: _floatingAssistantBusy ? null : _resetFloatingAssistant,
               ),
-              title: Text(_broker.brokerName),
-              subtitle: Text(_brokerConnected
-                  ? "Connected • sandbox (paper trades only)"
-                  : "Not connected • REST-ready for a real broker later"),
-              trailing: _brokerConnecting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : TextButton(
-                      onPressed: _brokerConnected ? null : _connectBroker,
-                      child: Text(_brokerConnected ? "CONNECTED" : "CONNECT"),
-                    ),
             ),
-          ),
+          ],
           const SizedBox(height: 20),
 
           // ---------- PRIVACY ----------

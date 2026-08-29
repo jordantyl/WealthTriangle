@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:pdf/pdf.dart';
@@ -12,11 +11,7 @@ import '../../shared/backend_headers.dart';
 class EventIntegrationService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // ✅ SECURITY FIX: No more RapidAPI/OpenAI keys on the device.
-  // All third-party calls now go through YOUR Flask backend, which
-  // holds the keys as server environment variables.
-  static String get _baseUrl =>
-      dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+  static String get _baseUrl => defaultBackendBaseUrl;
 
   // Set right before returning by fetchEventsForWatchlist(), so callers can
   // tell fallback demo events apart from real ones without changing the
@@ -46,8 +41,13 @@ class EventIntegrationService {
                 title: '$ticker Earnings Report',
                 ticker: ticker,
                 type: EventType.earningsReport,
-                eventDate:
-                    DateTime.fromMillisecondsSinceEpoch(earningsTs * 1000),
+                // isUtc: true — the backend encodes this as UTC midnight on
+                // the calendar date (see _date_to_epoch in app.py). Without
+                // it, this decodes in device-local time, which shifts the
+                // displayed date a day earlier for any timezone west of UTC.
+                eventDate: DateTime.fromMillisecondsSinceEpoch(
+                    earningsTs * 1000,
+                    isUtc: true),
                 estimatedEPS: calData['earnings']?['earningsAverage']?['fmt']
                     ?.toString(),
                 description:
@@ -64,8 +64,9 @@ class EventIntegrationService {
                 title: '$ticker Dividend Ex-Date',
                 ticker: ticker,
                 type: EventType.dividendExDate,
-                eventDate:
-                    DateTime.fromMillisecondsSinceEpoch(exDivTs * 1000),
+                eventDate: DateTime.fromMillisecondsSinceEpoch(
+                    exDivTs * 1000,
+                    isUtc: true),
                 dividendAmount: divAmount,
                 description:
                     'You must own $ticker shares before this date to receive the dividend.',

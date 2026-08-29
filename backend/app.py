@@ -1,10 +1,14 @@
 import sys
 import os
 import json
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from bs4 import BeautifulSoup
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -61,6 +65,17 @@ if SENTRY_DSN:
     )
 
 app = Flask(__name__)
+
+# Render (and most PaaS hosts) put the app behind a reverse proxy, so
+# request.remote_addr is the proxy's internal IP for every request unless we
+# trust its X-Forwarded-For header. Without this, Flask-Limiter's per-IP
+# limits below (get_remote_address) silently collapse into ONE shared bucket
+# for every user of the deployed app combined — one user switching a filter
+# a few times can burn through the whole quota and start 429-ing everyone
+# else, which looks like "rate limited after barely doing anything."
+# x_for=1 trusts exactly one proxy hop, matching Render's single edge proxy.
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # =====================================================================
 # 🔐 CORS — restricted to an explicit allowlist instead of the default
@@ -141,10 +156,15 @@ def _verified_claims_or_none():
         return None
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
+        print("Firebase auth: no Bearer token on request")
         return None
     try:
         return admin_auth.verify_id_token(header[len("Bearer "):])
-    except Exception:
+    except Exception as e:
+        # Was previously silent, which made every 401 a dead end to debug —
+        # this is the only place that sees *why* a token was rejected
+        # (expired, wrong project, malformed, clock skew, etc.).
+        print(f"Firebase auth: token verification failed: {e}")
         return None
 
 
@@ -262,11 +282,6 @@ def _require_api_key():
     return None
 
 
-VIP_COUNTRIES = {
-    ".KL": {"label": "MY", "color": "orange"},
-}
-
-
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -354,7 +369,68 @@ def time_machine_backtest():
 # NEWS PROXY — free, via yfinance (same Yahoo Finance data RapidAPI's
 # "yahoo-finance15" was reselling for a fee). No RAPIDAPI_KEY needed.
 # GET /api/news?symbols=AAPL,MSFT
+#
+# Two perf fixes here:
+# 1. Per-ticker results are cached for NEWS_CACHE_TTL_SECONDS. Switching the
+#    scope/ticker filter in the app usually re-queries a ticker set that
+#    overlaps heavily with the last one (e.g. "All" vs "Watchlist" vs
+#    "Holdings" draw from the same handful of tickers) — cache hits make
+#    those feel instant instead of re-hitting Yahoo every time.
+# 2. Tickers that DO need a live fetch are fetched concurrently (thread pool
+#    — this call is I/O-bound, waiting on Yahoo, not CPU-bound) instead of
+#    one-at-a-time. 5 sequential ~1-2s Yahoo calls is exactly the ~10s load
+#    users were seeing; run in parallel, total time is ~the slowest single
+#    ticker instead of the sum of all of them.
 # =====================================================================
+NEWS_CACHE_TTL_SECONDS = 300
+_news_cache = {}  # ticker -> (fetched_at_monotonic, [raw article dicts])
+_news_cache_lock = threading.Lock()
+
+
+def _fetch_ticker_news_raw(ticker):
+    """Returns this ticker's news as a list of our article-shaped dicts, using
+    the cache when fresh. Never raises — a failed/rate-limited ticker just
+    yields an empty list so one bad ticker doesn't blank the whole feed."""
+    now = time.monotonic()
+    with _news_cache_lock:
+        cached = _news_cache.get(ticker)
+    if cached and (now - cached[0]) < NEWS_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    result = []
+    try:
+        for item in (yf.Ticker(ticker).news or [])[:8]:
+            content = item.get('content') or {}
+            news_id = item.get('id') or content.get('id')
+            if not news_id:
+                continue
+
+            thumbnail = content.get('thumbnail') or {}
+            resolutions = thumbnail.get('resolutions') or []
+            thumb_url = resolutions[0]['url'] if resolutions else ''
+
+            link = (content.get('canonicalUrl') or {}).get('url') \
+                or (content.get('clickThroughUrl') or {}).get('url') or ''
+
+            result.append({
+                "uuid": news_id,
+                "title": content.get('title', ''),
+                "publisher": (content.get('provider') or {}).get('displayName', ''),
+                "link": link,
+                "thumbnail": {"resolutions": [{"url": thumb_url}]} if thumb_url else {},
+                "providerPublishTime": content.get('pubDate', ''),
+                "summary": content.get('summary', ''),
+                "related_ticker": ticker,
+            })
+    except Exception as e:
+        print(f"News fetch error for {ticker}: {e}")
+        result = []
+
+    with _news_cache_lock:
+        _news_cache[ticker] = (now, result)
+    return result
+
+
 @app.route('/api/news', methods=['GET'])
 def news_proxy():
     auth_error = _require_firebase_user()
@@ -368,41 +444,26 @@ def news_proxy():
     articles = []
     seen_ids = set()
 
+    # Concurrent per-ticker fetch (cache-aware); results are collected back
+    # into a ticker -> articles map so we can still combine them in the
+    # caller's original ticker order below — parallelizing must not change
+    # which ticker "wins" a duplicate article, only how long we wait.
+    with ThreadPoolExecutor(max_workers=max(1, len(tickers))) as pool:
+        results_by_ticker = dict(zip(tickers, pool.map(_fetch_ticker_news_raw, tickers)))
+
     for ticker in tickers:
-        try:
-            for item in (yf.Ticker(ticker).news or [])[:8]:
-                content = item.get('content') or {}
-                news_id = item.get('id') or content.get('id')
-                if not news_id or news_id in seen_ids:
-                    continue
-                seen_ids.add(news_id)
-
-                thumbnail = content.get('thumbnail') or {}
-                resolutions = thumbnail.get('resolutions') or []
-                thumb_url = resolutions[0]['url'] if resolutions else ''
-
-                link = (content.get('canonicalUrl') or {}).get('url') \
-                    or (content.get('clickThroughUrl') or {}).get('url') or ''
-
-                articles.append({
-                    "uuid": news_id,
-                    "title": content.get('title', ''),
-                    "publisher": (content.get('provider') or {}).get('displayName', ''),
-                    "link": link,
-                    "thumbnail": {"resolutions": [{"url": thumb_url}]} if thumb_url else {},
-                    "providerPublishTime": content.get('pubDate', ''),
-                    "summary": content.get('summary', ''),
-                    # Which queried ticker surfaced this article. Since tickers
-                    # are queried in caller-supplied order and dedup keeps only
-                    # the first hit, callers that put held/portfolio tickers
-                    # first (see /api/calendar_events's same convention) get
-                    # those as the related_ticker on any article both a held
-                    # and a merely-watchlisted ticker would have surfaced.
-                    "related_ticker": ticker,
-                })
-        except Exception as e:
-            print(f"News fetch error for {ticker}: {e}")
-            continue
+        for article in results_by_ticker.get(ticker, []):
+            news_id = article["uuid"]
+            if news_id in seen_ids:
+                continue
+            seen_ids.add(news_id)
+            # Which queried ticker surfaced this article. Since tickers are
+            # queried in caller-supplied order and dedup keeps only the
+            # first hit, callers that put held/portfolio tickers first (see
+            # /api/calendar_events's same convention) get those as the
+            # related_ticker on any article both a held and a merely-
+            # watchlisted ticker would have surfaced.
+            articles.append(article)
 
     articles.sort(key=lambda a: a.get('providerPublishTime') or '', reverse=True)
     return jsonify({"body": articles[:20]})
@@ -414,7 +475,14 @@ def news_proxy():
 # GET /api/calendar_events?ticker=AAPL
 # =====================================================================
 def _date_to_epoch(d):
-    return int(datetime.combine(d, datetime.min.time()).timestamp())
+    # yfinance's calendar dates (Earnings Date / Ex-Dividend Date) are plain
+    # `date` objects — a calendar date, not an instant. Without tzinfo=utc,
+    # datetime.combine(...).timestamp() interprets midnight in the SERVER's
+    # local timezone (UTC on Render), which for any client west of UTC
+    # (all of the Americas) shifts the epoch back to the previous local day
+    # once decoded — see the client-side isUtc:true fix in
+    # event_integration_api.dart for the other half of this.
+    return int(datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc).timestamp())
 
 
 @app.route('/api/calendar_events', methods=['GET'])
@@ -828,6 +896,82 @@ def assistant_proxy():
     }), 502
 
 
+# =====================================================================
+# INDEX CONSTITUENT ALLOW-LIST — the app only supports two markets, and
+# specifically the *index members* of each (FBM KLCI's 30 stocks / the
+# S&P 500), not just "any stock listed on Bursa or a US exchange". Neither
+# index has a free official API, so this scrapes Wikipedia's maintained
+# constituent tables (no extra dependency — beautifulsoup4 is already a
+# transitive requirement) and caches the result in-process, since
+# membership only changes a handful of times a year — no need to hit
+# Wikipedia on every search keystroke.
+# =====================================================================
+_INDEX_CACHE = {"sp500": None, "klci": None, "fetched_at": 0.0}
+_INDEX_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+
+def _fetch_sp500_tickers():
+    r = requests.get(
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+        headers={"User-Agent": "Mozilla/5.0"}, timeout=15,
+    )
+    soup = BeautifulSoup(r.text, "html.parser")
+    table = soup.find("table", {"id": "constituents"})
+    tickers = set()
+    for row in table.find_all("tr")[1:]:
+        cells = row.find_all("td")
+        if not cells:
+            continue
+        # Wikipedia writes multi-class tickers as "BRK.B" / "BF.B"; Yahoo's
+        # own symbols (and what /api/search actually returns) use a hyphen.
+        ticker = cells[0].text.strip().replace(".", "-")
+        if ticker:
+            tickers.add(ticker)
+    return tickers
+
+
+def _fetch_klci_tickers():
+    r = requests.get(
+        "https://en.wikipedia.org/wiki/FTSE_Bursa_Malaysia_KLCI",
+        headers={"User-Agent": "Mozilla/5.0"}, timeout=15,
+    )
+    soup = BeautifulSoup(r.text, "html.parser")
+    tickers = set()
+    # The page has two wikitables (historical index levels, then the actual
+    # constituent list) — scan both and pick out rows with a numeric stock
+    # code rather than hardcoding a table index, so a page reordering
+    # doesn't silently start reading the wrong table.
+    for table in soup.find_all("table", {"class": "wikitable"}):
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            code = cells[1].text.strip()
+            if code.isdigit():
+                tickers.add(f"{code}.KL")
+    return tickers
+
+
+def _get_index_constituents():
+    """Returns (sp500_tickers, klci_tickers), refreshing from Wikipedia at
+    most once per _INDEX_CACHE_TTL_SECONDS. Falls back to the last
+    successfully fetched lists (even if stale) rather than empty sets if a
+    refresh attempt fails, so a transient Wikipedia/network hiccup doesn't
+    make search return nothing."""
+    now = time.time()
+    if _INDEX_CACHE["sp500"] and now - _INDEX_CACHE["fetched_at"] < _INDEX_CACHE_TTL_SECONDS:
+        return _INDEX_CACHE["sp500"], _INDEX_CACHE["klci"]
+    try:
+        sp500 = _fetch_sp500_tickers()
+        klci = _fetch_klci_tickers()
+        if sp500 and klci:
+            _INDEX_CACHE.update({"sp500": sp500, "klci": klci, "fetched_at": now})
+            return sp500, klci
+    except Exception as e:
+        print(f"Index constituent fetch failed: {e}")
+    return _INDEX_CACHE["sp500"] or set(), _INDEX_CACHE["klci"] or set()
+
+
 @app.route('/api/search', methods=['GET'])
 def search_ticker():
     auth_error = _require_firebase_user()
@@ -844,37 +988,32 @@ def search_ticker():
         r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
         quotes = data.get('quotes', [])
+        sp500_tickers, klci_tickers = _get_index_constituents()
         results = []
 
         for q in quotes:
             quote_type = q.get('quoteType', '').upper()
-            if quote_type in ['EQUITY', 'ETF', 'MUTUALFUND', 'INDEX']:
-                symbol = q.get('symbol', '')
-                name = q.get('shortname', q.get('longname', 'Unknown'))
+            if quote_type != 'EQUITY':
+                continue  # KLCI/S&P 500 membership is an individual-stock concept
 
-                tag_label = "US"
-                tag_color = "blue"
-                if quote_type == 'ETF':
-                    tag_label = "ETF"
-                    tag_color = "purple"
-                else:
-                    for suffix, config in VIP_COUNTRIES.items():
-                        if symbol.endswith(suffix):
-                            tag_label = config["label"]
-                            tag_color = config["color"]
-                            break
-                    if tag_label == "US" and "." in symbol:
-                        tag_label = symbol.split(".")[-1]
-                        tag_color = "grey"
+            symbol = q.get('symbol', '')
+            if symbol in klci_tickers:
+                tag_label, tag_color = "MY", "orange"
+            elif symbol in sp500_tickers:
+                tag_label, tag_color = "US", "blue"
+            else:
+                continue
 
-                results.append({
-                    "symbol": symbol,
-                    "name": name,
-                    "type": quote_type,
-                    "exch": q.get('exchange', ''),
-                    "tag_label": tag_label,
-                    "tag_color": tag_color
-                })
+            name = q.get('shortname', q.get('longname', 'Unknown'))
+
+            results.append({
+                "symbol": symbol,
+                "name": name,
+                "type": quote_type,
+                "exch": q.get('exchange', ''),
+                "tag_label": tag_label,
+                "tag_color": tag_color
+            })
         return jsonify(results)
     except Exception as e:
         print(f"Search Error: {e}")
@@ -907,6 +1046,71 @@ def _infer_dividend_frequency(divs):
         return 1  # annual
 
 
+def _estimate_upcoming_payments(divs, today):
+    """
+    Estimates which payment(s) are still coming later this calendar year, by
+    date rather than just a lump annual/12 blend — e.g. if today is August
+    and this ticker has historically paid every March and September, this
+    returns a September estimate (skipping March, since that slot already
+    happened this year), with the amount averaged over the last few years'
+    September payments specifically, not blended with the March ones.
+
+    Clusters by day-of-year *distance* to each of the most recent full
+    cycle's payment dates (not by exact calendar month) — a payment that
+    drifts a few weeks year to year can cross a month boundary (e.g. an
+    "October" payment landing in September the following year), and
+    bucketing by exact month would then wrongly split one real recurring
+    slot into two. Restricted to the same trailing window
+    _infer_dividend_frequency() uses (last 8 payments) so a ticker that
+    discontinued an old payment slot years ago doesn't resurface as a
+    phantom "upcoming" payment.
+    """
+    freq = _infer_dividend_frequency(divs)
+    recent = divs.tail(8)
+    if recent.empty or freq <= 0:
+        return []
+
+    # The most recent `freq` payments anchor this year's expected slots —
+    # e.g. for a semi-annual payer, the last 2 payments mark roughly where
+    # in the year each of the two annual payments falls.
+    template_dates = list(recent.tail(freq).index)
+
+    def circular_doy_distance(a, b, year_len=365.25):
+        d = abs(a - b)
+        return min(d, year_len - d)
+
+    slots = {i: [] for i in range(len(template_dates))}
+    for idx, amt in recent.items():
+        closest = min(
+            range(len(template_dates)),
+            key=lambda i: circular_doy_distance(idx.dayofyear, template_dates[i].dayofyear),
+        )
+        slots[closest].append((idx, float(amt)))
+
+    upcoming = []
+    for slot_entries in slots.values():
+        if not slot_entries or any(idx.year == today.year for idx, _ in slot_entries):
+            continue  # empty, or this slot's payment already landed this year
+        avg_amount = sum(amt for _, amt in slot_entries) / len(slot_entries)
+        # Anchor the expected month/day on this slot's most recent actual
+        # occurrence, applied to the current year.
+        anchor = max(slot_entries, key=lambda e: e[0])[0]
+        try:
+            expected_date = anchor.replace(year=today.year)
+        except ValueError:
+            expected_date = anchor.replace(year=today.year, day=28)  # Feb 29 in a non-leap year
+        if (expected_date.month, expected_date.day) <= (today.month, today.day):
+            continue  # this slot's typical date already passed this year without a payment — likely discontinued, not "upcoming"
+        upcoming.append({
+            "expected_date": expected_date.strftime('%Y-%m-%d'),
+            "amount": round(avg_amount, 4),
+            "based_on_years": sorted({idx.year for idx, _ in slot_entries}),
+        })
+
+    upcoming.sort(key=lambda u: u["expected_date"])
+    return upcoming
+
+
 # =====================================================================
 # REAL DIVIDEND HISTORY — replaces the flat "trailing yield %" passive
 # income estimate with an actual payment-schedule-based prediction:
@@ -934,6 +1138,9 @@ def dividend_history():
                 "frequency_per_year": 0,
                 "trailing_12m_total": 0.0,
                 "projected_annual_per_share": 0.0,
+                "paid_this_calendar_year_per_share": 0.0,
+                "remaining_this_year_per_share": 0.0,
+                "upcoming_payments": [],
             })
 
         frequency_per_year = _infer_dividend_frequency(divs)
@@ -942,6 +1149,18 @@ def dividend_history():
 
         one_year_ago = pd.Timestamp.now(tz=divs.index.tz) - pd.Timedelta(days=365)
         trailing_12m_total = float(divs[divs.index >= one_year_ago].sum())
+
+        today = pd.Timestamp.now(tz=divs.index.tz)
+        jan_1_this_year = pd.Timestamp(year=today.year, month=1, day=1, tz=divs.index.tz)
+        paid_this_calendar_year = float(divs[divs.index >= jan_1_this_year].sum())
+
+        # "What's still coming this calendar year" — date-aware, not just a
+        # blended annual-minus-paid guess: matches each historical payment to
+        # the calendar slot (month) it recurs in, averaged over the last few
+        # years of that specific slot, and only counts slots whose typical
+        # date is still ahead of today. See _estimate_upcoming_payments().
+        upcoming_payments = _estimate_upcoming_payments(divs, today)
+        remaining_this_year = round(sum(p["amount"] for p in upcoming_payments), 4)
 
         payments = [
             {"date": idx.strftime('%Y-%m-%d'), "amount": round(float(amt), 4)}
@@ -954,6 +1173,9 @@ def dividend_history():
             "frequency_per_year": frequency_per_year,
             "trailing_12m_total": round(trailing_12m_total, 4),
             "projected_annual_per_share": projected_annual_per_share,
+            "paid_this_calendar_year_per_share": round(paid_this_calendar_year, 4),
+            "remaining_this_year_per_share": remaining_this_year,
+            "upcoming_payments": upcoming_payments,
         })
     except Exception as e:
         print(f"Dividend History Error: {e}")
@@ -987,7 +1209,14 @@ def get_stock_data():
 
         macd_data = calculate_macd(df['Close'])
 
-        ma50 = df['Close'].rolling(window=50).mean().iloc[-1] if len(df) > 50 else current_price
+        # Use a 50-day MA when we have enough history, otherwise the widest
+        # MA the available data actually supports — previously this fell
+        # back to `ma50 = current_price` for any period under 50 rows
+        # (period=5d, 1mo, or a fresh IPO even under 1y), which made
+        # `current_price > ma50` always false and forced trend/reasons to
+        # "DOWN"/"Below MA50" regardless of the ticker's real momentum.
+        ma_window = min(50, len(df))
+        ma50 = df['Close'].rolling(window=ma_window).mean().iloc[-1] if ma_window > 1 else current_price
 
         trend = "UP" if current_price > ma50 else "DOWN"
 

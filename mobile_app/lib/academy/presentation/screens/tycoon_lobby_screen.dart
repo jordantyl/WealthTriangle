@@ -61,7 +61,10 @@ class _TycoonLobbyScreenState extends State<TycoonLobbyScreen> {
   }
 
   void _createOnline() async {
-    if (_nameCtrl.text.isEmpty) return;
+    if (_nameCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter your name first!")));
+      return;
+    }
     setState(() => _isConnecting = true);
     final state = Provider.of<AcademyState>(context, listen: false);
     String roomId = await state.createBattleRoom(_nameCtrl.text);
@@ -73,7 +76,14 @@ class _TycoonLobbyScreenState extends State<TycoonLobbyScreen> {
   }
 
   void _joinOnline() async {
-    if (_nameCtrl.text.isEmpty || _roomCtrl.text.isEmpty) return;
+    if (_nameCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter your name first!")));
+      return;
+    }
+    if (_roomCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter a Room ID to join.")));
+      return;
+    }
     setState(() => _isConnecting = true);
     final state = Provider.of<AcademyState>(context, listen: false);
     bool success = await state.joinBattleRoom(_roomCtrl.text.trim(), _nameCtrl.text);

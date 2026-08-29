@@ -19,10 +19,15 @@ void main() {
       expect(rules.oddLotAllowed, true);
     });
 
-    test('US / unrecognized tickers default to flexible fractional rules', () {
+    test('US / unrecognized tickers default to flexible whole-share rules', () {
       final rules = MarketRules.forTicker('AAPL');
       expect(rules.minTradeQty, 1);
-      expect(rules.fractionalAllowed, true);
+      // Fractional shares aren't actually supported anywhere downstream
+      // (PortfolioState.buyStock/sellStock are int-qty only) — the UI used
+      // to advertise fractional input anyway and silently truncate it on
+      // submit while the P&L preview showed $0, so this is now false to
+      // match what the system can actually execute.
+      expect(rules.fractionalAllowed, false);
       expect(rules.oddLotAllowed, true);
     });
 
@@ -66,8 +71,8 @@ void main() {
       expect(klRules.validateQuantity('100.5'), isNotNull);
     });
 
-    test('US allows fractional share quantities', () {
-      expect(usRules.validateQuantity('1.5'), isNull);
+    test('US rejects fractional share quantities (not supported downstream)', () {
+      expect(usRules.validateQuantity('1.5'), isNotNull);
     });
   });
 
@@ -87,8 +92,8 @@ void main() {
       expect(klRules.validateSell('10.5', 100), isNotNull);
     });
 
-    test('allows fractional sells where fractional is allowed', () {
-      expect(usRules.validateSell('2.5', 10), isNull);
+    test('rejects fractional sells for US tickers too (not supported downstream)', () {
+      expect(usRules.validateSell('2.5', 10), isNotNull);
     });
 
     test('rejects zero or invalid sell quantity', () {

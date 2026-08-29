@@ -217,17 +217,29 @@ class _ContentDocEditorDialogState extends State<_ContentDocEditorDialog> {
         ),
       );
     }
+    final isMultiline = field.type == FieldType.multilineText ||
+        field.type == FieldType.stringList ||
+        field.type == FieldType.numberMap;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: TextField(
         controller: _controllers[field.key],
-        maxLines: field.type == FieldType.multilineText || field.type == FieldType.stringList ||
-                field.type == FieldType.numberMap
-            ? 4
-            : 1,
+        maxLines: isMultiline ? 4 : 1,
+        // Was TextInputType.text for these "one per line" fields too — on
+        // Flutter Web the keyboardType decides whether the field binds to a
+        // single-line <input> or a <textarea>, so without this, pressing
+        // Enter here just defocused the field instead of adding a line
+        // break, and multi-line paste/programmatic input got silently
+        // collapsed to one line. Confirmed live: this corrupted saved data
+        // with no error shown (e.g. a quiz's 4 answer options collapsing
+        // into one garbled string) since stringList/numberMap fields are
+        // parsed by splitting on '\n' (see _collectValues() above).
         keyboardType: field.type == FieldType.number
             ? const TextInputType.numberWithOptions(decimal: true, signed: true)
-            : TextInputType.text,
+            : isMultiline
+                ? TextInputType.multiline
+                : TextInputType.text,
+        textInputAction: isMultiline ? TextInputAction.newline : TextInputAction.done,
         decoration: InputDecoration(
           labelText: field.label,
           helperText: field.hint,

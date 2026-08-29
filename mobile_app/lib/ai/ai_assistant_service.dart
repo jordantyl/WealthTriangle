@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../investment/application/portfolio_state.dart';
 import '../user/application/wealth_state.dart';
 import '../academy/application/academy_state.dart';
@@ -28,11 +27,7 @@ const Set<String> mutatingAiActions = {
 };
 
 class AIAssistantService {
-  // ✅ FIXED: was http://localhost:11434 — dead on any real device or
-  // emulator. Now goes through your Flask backend, which forwards to
-  // Ollama running on the laptop.
-  static String get _baseUrl =>
-      dotenv.env['BACKEND_BASE_URL'] ?? 'http://10.0.2.2:5000';
+  static String get _baseUrl => defaultBackendBaseUrl;
 
   final WealthState wealthState;
   final PortfolioState portfolioState;
@@ -73,6 +68,7 @@ Read-only:
 - run_backtest(ticker, start_date, end_date): Runs a historical simulation.
 - get_user_triangle_health(): Returns the user's current Return-Safety-Liquidity scores.
 - get_portfolio_summary(): Returns the user's current holdings and P&L.
+- get_watchlist(): Returns the tickers currently on the user's watchlist.
 
 Mutating (require confirmation):
 - record_holding(ticker, quantity, price): Records a stock purchase (adds to or creates a holding).
@@ -90,8 +86,18 @@ Mutating (require confirmation):
 - set_triangle_preference(preference): Sets Triangle preference to one of "balanced", "safety", "liquidity", "return".
 ''';
 
-  Future<Map<String, dynamic>> processQuery(String userQuery) async {
-    final prompt = """
+  // [history] is the conversation so far (oldest first) — without it, every
+  // message is answered with zero memory of what was just said, which
+  // defeats the point of a saved, resumable chat. Capped to the last 10
+  // turns so the prompt doesn't grow unbounded over a long conversation.
+  String _buildPrompt(String userQuery, {List<Map<String, String>> history = const []}) {
+    final recentHistory = history.length > 10 ? history.sublist(history.length - 10) : history;
+    final historyBlock = recentHistory.isEmpty
+        ? ''
+        : '\nConversation so far:\n'
+            '${recentHistory.map((m) => '${m['role'] == 'user' ? 'User' : 'Assistant'}: ${m['content']}').join('\n')}\n';
+
+    return """
 $_systemPrompt
 
 $toolDefinition
@@ -100,45 +106,106 @@ User Profile:
 - Risk Tolerance: ${wealthState.riskTolerance}
 - Safety Score: ${wealthState.safetyScore}
 - Passive Income: \$${wealthState.totalPassiveIncome}
-
+$historyBlock
 User Query: "$userQuery"
 
 Return your response in JSON format with keys: "action" (the tool name or "chat"), "parameters" (the tool parameters), "confirmation_needed" (true/false), and "message" (your natural language response).
 """;
+  }
 
+  // Shared by processQuery/processImageQuery — same JSON-action contract
+  // either way, parsed the same way regardless of which backend endpoint
+  // produced the raw text.
+  Map<String, dynamic> _parseActionResponse(String responseText) {
+    try {
+      final parsed = json.decode(_stripJsonFence(responseText));
+      // A model that returns valid JSON with a blank/whitespace-only
+      // "message" (e.g. Ollama echoing an empty completion) would otherwise
+      // render as a silent, empty chat bubble — callers' `?? fallback` only
+      // catches a missing key, not an empty string.
+      final message = parsed['message'];
+      if (message is String && message.trim().isEmpty) {
+        parsed['message'] = 'I understand. How can I help?';
+      }
+      return parsed;
+    } catch (_) {
+      return {
+        'action': 'chat',
+        'message': responseText.trim().isEmpty
+            ? 'I understand. How can I help?'
+            : responseText,
+        'confirmation_needed': false,
+      };
+    }
+  }
+
+  static const Map<String, dynamic> _connectionErrorResult = {
+    'action': 'chat',
+    'message':
+        'I am having trouble connecting to my brain. Please make sure the backend server and Ollama are running.',
+    'confirmation_needed': false,
+  };
+
+  Future<Map<String, dynamic>> processQuery(
+    String userQuery, {
+    List<Map<String, String>> history = const [],
+  }) async {
     try {
       final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
       final response = await http
           .post(
             Uri.parse('$_baseUrl/api/assistant'),
             headers: headers,
-            body: json.encode({'prompt': prompt}),
+            body: json.encode({'prompt': _buildPrompt(userQuery, history: history)}),
           )
           .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final responseText = data['response'] as String;
-        try {
-          return json.decode(_stripJsonFence(responseText));
-        } catch (_) {
-          return {
-            'action': 'chat',
-            'message': responseText,
-            'confirmation_needed': false,
-          };
-        }
+        return _parseActionResponse(data['response'] as String);
       }
     } catch (e) {
       print("Assistant Error: $e");
     }
+    return _connectionErrorResult;
+  }
 
-    return {
-      'action': 'chat',
-      'message':
-          'I am having trouble connecting to my brain. Please make sure the backend server and Ollama are running.',
-      'confirmation_needed': false,
-    };
+  // Same tool-calling contract as processQuery, but with an image attached —
+  // lets the floating assistant's camera input (and, once wired in, the
+  // in-app assistant's) act on what it sees (e.g. "record this holding from
+  // the trade confirmation screenshot"), not just describe it. Gemini-only
+  // on the backend (/api/assistant/vision) — no Ollama/OpenAI fallback,
+  // since this needs real vision support.
+  Future<Map<String, dynamic>> processImageQuery(
+    List<int> imageBytes, {
+    String userCaption = '',
+    String mimeType = 'image/jpeg',
+    List<Map<String, String>> history = const [],
+  }) async {
+    final effectiveCaption =
+        userCaption.trim().isEmpty ? 'Describe this image, and act on it if relevant.' : userCaption;
+    try {
+      final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/api/assistant/vision'),
+            headers: headers,
+            body: json.encode({
+              'prompt': _buildPrompt(effectiveCaption, history: history),
+              'image_base64': base64Encode(imageBytes),
+              'mime_type': mimeType,
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return _parseActionResponse(data['response'] as String);
+      }
+    } catch (e) {
+      print("Assistant Vision Error: $e");
+    }
+    return _connectionErrorResult;
   }
 
   // Gemini (and sometimes other models) often wrap JSON replies in a
@@ -331,6 +398,8 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
         return _getUserTriangleHealth();
       case 'get_portfolio_summary':
         return _getPortfolioSummary();
+      case 'get_watchlist':
+        return _getWatchlistSummary();
       case 'run_backtest':
         return await _runBacktest(params['ticker'] ?? 'AAPL');
       case 'add_to_watchlist':
@@ -498,5 +567,12 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
           "- ${item.ticker}: ${item.quantity} units, Value: \$${item.totalValue.toStringAsFixed(0)}\n";
     }
     return summary;
+  }
+
+  String _getWatchlistSummary() {
+    if (wealthState.watchlist.isEmpty) {
+      return "Your watchlist is empty.";
+    }
+    return "Your watchlist: ${wealthState.watchlist.join(', ')}";
   }
 }

@@ -1,9 +1,7 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../data/scenario_data.dart';
 import '../domain/lesson.dart';
 import '../../shared/backend_headers.dart';
@@ -35,6 +33,11 @@ class AcademyState extends ChangeNotifier {
   List<TradeItem> _marketItems = [];
   Map<String, int> _inventory = {};
   Map<String, double> _inventoryAvgCost = {};
+  // Every item's price the last day it appeared in the 5-of-12 daily
+  // rotation (see nextMerchantTurn) — lets net-worth valuation price an
+  // owned item on a day it's NOT in today's rotation, instead of treating
+  // it as worth $0 just because it isn't for sale today.
+  Map<String, double> _lastKnownPrices = {};
   double _merchantCash = 5000;
   int _currentTurn = 1;
   int _maxTurns = 20;
@@ -60,6 +63,7 @@ class AcademyState extends ChangeNotifier {
   List<Map<String, dynamic>> get flashScenarios => _flashScenarios;
 
   List<TradeItem> get marketItems => _marketItems;
+  Map<String, double> get lastKnownPrices => _lastKnownPrices;
   TradeEvent? get activeEvent => _activeEvent;
   TradeEvent? get upcomingRumor => _upcomingRumor;
   Map<String, int> get inventory => _inventory;
@@ -96,9 +100,11 @@ class AcademyState extends ChangeNotifier {
 
   Future<void> _checkAdminStatus() async {
     try {
-      final baseUrl = kIsWeb
-          ? defaultBackendBaseUrl
-          : (dotenv.env['BACKEND_BASE_URL'] ?? defaultBackendBaseUrl);
+      // defaultBackendBaseUrl already covers web vs native and the full
+      // dart-define -> .env -> localhost fallback chain; checking dotenv
+      // directly here (as this used to) bypassed the dart-define check on
+      // native and could silently resolve to a stale local .env value.
+      final baseUrl = defaultBackendBaseUrl;
       final headers = await authedBackendHeaders();
       final response = await http.get(Uri.parse('$baseUrl/api/admin/status'), headers: headers);
       if (response.statusCode == 200) {
@@ -210,6 +216,7 @@ class AcademyState extends ChangeNotifier {
     _merchantCash = 5000;
     _inventory.clear();
     _inventoryAvgCost.clear();
+    _lastKnownPrices.clear();
     _currentTurn = 0;
     _upcomingRumor = null;
     _lastRobberyTurn = -1;
@@ -267,6 +274,7 @@ class AcademyState extends ChangeNotifier {
           }
           price *= multiplier;
         }
+        _lastKnownPrices[item.id] = price;
         todaysMarket.add(item.withPrice(price));
       }
     }
@@ -583,9 +591,7 @@ class AcademyState extends ChangeNotifier {
         : (Map<String, Map<String, dynamic>>.from(collections)
           ..removeWhere((key, _) => !only.contains(key)));
 
-    final baseUrl = kIsWeb
-        ? defaultBackendBaseUrl
-        : (dotenv.env['BACKEND_BASE_URL'] ?? defaultBackendBaseUrl);
+    final baseUrl = defaultBackendBaseUrl;
     final headers = await authedBackendHeaders({'Content-Type': 'application/json'});
     final response = await http.post(
       Uri.parse('$baseUrl/api/admin/seed'),
@@ -729,14 +735,14 @@ class AcademyState extends ChangeNotifier {
     Map<String, dynamic> hostInv = data['hostInvestments'] ?? {};
     double hostNewCash = (data['hostCash'] as num).toDouble();
     hostInv.forEach((asset, amount) {
-      double multiplier = scenario.assetImpact[asset] ?? 1.0;
+      double multiplier = scenario.impactFor(asset);
       hostNewCash += (amount * multiplier) - amount;
     });
 
     Map<String, dynamic> guestInv = data['guestInvestments'] ?? {};
     double guestNewCash = (data['guestCash'] as num).toDouble();
     guestInv.forEach((asset, amount) {
-      double multiplier = scenario.assetImpact[asset] ?? 1.0;
+      double multiplier = scenario.impactFor(asset);
       guestNewCash += (amount * multiplier) - amount;
     });
 
