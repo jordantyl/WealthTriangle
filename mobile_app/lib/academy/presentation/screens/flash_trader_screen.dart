@@ -30,6 +30,11 @@ class _FlashTraderScreenState extends State<FlashTraderScreen> {
 
   // Pick a card based on User Level
   void _loadNextScenario() {
+    // Guards the Future.delayed callback in _handleDecision below — if the
+    // user backs out of this screen within that 300ms window, this would
+    // otherwise run against a disposed State's context (Provider.of / setState
+    // after dispose), which throws.
+    if (!mounted) return;
     final academyState = Provider.of<AcademyState>(context, listen: false);
     
     // ✅ NEW: Use the filtered list

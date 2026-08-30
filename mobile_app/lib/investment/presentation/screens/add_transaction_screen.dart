@@ -41,6 +41,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     _priceController = TextEditingController(text: widget.currentPrice.toStringAsFixed(2));
   }
 
+  @override
+  void dispose() {
+    _qtyController.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
   Future<void> _scanReceipt() async {
     final ImagePicker picker = ImagePicker();
     // 1. Pick Image

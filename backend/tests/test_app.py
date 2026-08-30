@@ -34,6 +34,20 @@ def reset_keys(monkeypatch):
     monkeypatch.setattr(app_module, "_firestore_admin", None)
 
 
+class TestMaxContentLength:
+    def test_rejects_a_body_larger_than_the_configured_cap(self, client, monkeypatch):
+        # Nothing else in app.py bounds request body size before it's parsed
+        # into memory — this confirms MAX_CONTENT_LENGTH actually rejects an
+        # oversized payload (413) rather than letting Flask buffer it all.
+        monkeypatch.setattr(app_module.app, "config", {**app_module.app.config, "MAX_CONTENT_LENGTH": 100})
+        r = client.post(
+            "/api/summarize",
+            data=b"x" * 1000,
+            content_type="application/json",
+        )
+        assert r.status_code == 413
+
+
 class TestApiKeyGate:
     def test_unprotected_when_no_backend_key_configured(self, client):
         r = client.post("/api/summarize", json={"text": "hello"})
@@ -660,47 +674,86 @@ class TestAdminStatus:
 
 
 class TestAdminPromoteDemote:
+    # promote/demote now go through _require_admin_write() (same hard
+    # BACKEND_API_KEY requirement as content CRUD/seed — see app.py's
+    # comment on admin_promote_user), not just _require_admin_user(), so
+    # every test here needs the API key set up like the content-CRUD tests
+    # already do, on top of the admin-caller checks these tests exercise.
     def test_promote_requires_admin_caller(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
-        r = client.post("/api/admin/users/some-target-uid/promote")
+        r = client.post(
+            "/api/admin/users/some-target-uid/promote",
+            headers={"X-API-Key": "secret123"},
+        )
         assert r.status_code == 403
 
     def test_promote_sets_firestore_role_to_admin(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        fake = FakeFirestoreAdminUsers()
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
+        r = client.post(
+            "/api/admin/users/target-uid/promote",
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 200
+        assert fake.role_of("target-uid") == "admin"
+
+    def test_promote_requires_api_key(self, client, monkeypatch):
+        # The gap this test guards against: promote/demote used to only
+        # require Firebase admin status, unlike every other admin-write
+        # route — an admin caller with a valid ID token but no API key
+        # must now be rejected, matching content CRUD/seed.
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers()
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
         r = client.post("/api/admin/users/target-uid/promote")
-        assert r.status_code == 200
-        assert fake.role_of("target-uid") == "admin"
+        assert r.status_code == 401
+        assert fake.role_of("target-uid") is None
 
     def test_demote_requires_admin_caller(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(
             app_module, "_firestore_admin",
             FakeFirestoreAdminUsers({"target-uid": {"role": "admin"}}),
         )
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
-        r = client.post("/api/admin/users/target-uid/demote")
+        r = client.post(
+            "/api/admin/users/target-uid/demote",
+            headers={"X-API-Key": "secret123"},
+        )
         assert r.status_code == 403
 
     def test_demote_clears_firestore_role(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers({"target-uid": {"role": "admin"}})
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
-        r = client.post("/api/admin/users/target-uid/demote")
+        r = client.post(
+            "/api/admin/users/target-uid/demote",
+            headers={"X-API-Key": "secret123"},
+        )
         assert r.status_code == 200
         assert fake.role_of("target-uid") is None
 
     def test_cannot_demote_self(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers({"admin-uid": {"role": "admin"}})
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
-        r = client.post("/api/admin/users/admin-uid/demote")
+        r = client.post(
+            "/api/admin/users/admin-uid/demote",
+            headers={"X-API-Key": "secret123"},
+        )
         assert r.status_code == 400
         assert fake.role_of("admin-uid") == "admin"
 
@@ -708,9 +761,13 @@ class TestAdminPromoteDemote:
         # ADMIN_UIDS admins aren't stored in Firestore at all — demoting
         # them there would be a silent no-op, so this must fail loudly
         # instead of pretending it worked.
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers()
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
         monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid", "other-env-admin"})
-        r = client.post("/api/admin/users/other-env-admin/demote")
+        r = client.post(
+            "/api/admin/users/other-env-admin/demote",
+            headers={"X-API-Key": "secret123"},
+        )
         assert r.status_code == 400

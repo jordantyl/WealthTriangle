@@ -226,7 +226,18 @@ class _MerchantScreenState extends State<MerchantScreen> {
                         ])),
                         if (ownedQty > 0) _GameButton(color: Colors.redAccent, icon: Icons.sell, label: "x$ownedQty", onTap: () { state.sellItem(item); }),
                         const SizedBox(width: 8),
-                        _GameButton(color: state.totalInventoryCount >= state.maxInventorySlots ? Colors.grey : Colors.green, icon: Icons.add, label: "BUY", onTap: () { if (state.totalInventoryCount < state.maxInventorySlots) { state.buyItem(item); } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Inventory Full! Sell something first."), duration: Duration(milliseconds: 500))); } }),
+                        _GameButton(color: state.totalInventoryCount >= state.maxInventorySlots ? Colors.grey : Colors.green, icon: Icons.add, label: "BUY", onTap: () {
+                          if (state.totalInventoryCount >= state.maxInventorySlots) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Inventory Full! Sell something first."), duration: Duration(milliseconds: 500)));
+                          } else if (state.merchantCash < item.currentPrice) {
+                            // Was: tap silently did nothing when cash was too low (contrast
+                            // with the Inventory Full case above, which always explained
+                            // itself) — same snackbar pattern, just for the other rejection reason.
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Not enough cash for that."), duration: Duration(milliseconds: 500)));
+                          } else {
+                            state.buyItem(item);
+                          }
+                        }),
                       ],
                     ),
                   );

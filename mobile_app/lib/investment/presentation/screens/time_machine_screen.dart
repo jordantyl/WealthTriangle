@@ -50,6 +50,8 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
   @override
   void dispose() {
     _chartController.dispose();
+    _tickerCtrl.dispose();
+    _capitalCtrl.dispose();
     super.dispose();
   }
 
@@ -123,6 +125,12 @@ class _TimeMachineScreenState extends State<TimeMachineScreen> {
             await BadgeService.award(context, 'crash_survivor');
           }
         }
+      } else if (response.statusCode == 401) {
+        // Was showing the raw backend string ("Unauthorized: valid Firebase
+        // sign-in required") verbatim — inconsistent with the friendlier
+        // wording used elsewhere (e.g. the AI Assistant's fallback message).
+        setState(() => _error =
+            'Your session needs to be refreshed before running a simulation — try signing out and back in.');
       } else {
         setState(() => _error = data['error'] ?? 'Simulation failed.');
       }

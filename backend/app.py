@@ -66,6 +66,22 @@ if SENTRY_DSN:
 
 app = Flask(__name__)
 
+# =====================================================================
+# 🛡️ REQUEST BODY SIZE CAP — nothing else in this file bounds how large an
+# incoming request body can be before Flask parses it into memory. Without
+# this, a client (even one holding a valid Firebase token + API key, e.g. a
+# leaked/legit account gone rogue) could POST an arbitrarily large body —
+# most notably to /api/assistant/vision, whose image_base64 field is read
+# in full before any validation runs — and exhaust server memory/CPU on a
+# single free-tier dyno well before flask-limiter's per-minute request
+# COUNT limits would ever kick in (those cap how often, not how big).
+# 15 MB comfortably covers a phone-camera photo re-encoded as base64
+# (~4/3 size inflation puts an ~10 MB JPEG under this) with headroom, while
+# still rejecting anything wildly oversized with a clean 413 instead of a
+# slow/OOM failure.
+# =====================================================================
+app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024
+
 # Render (and most PaaS hosts) put the app behind a reverse proxy, so
 # request.remote_addr is the proxy's internal IP for every request unless we
 # trust its X-Forwarded-For header. Without this, Flask-Limiter's per-IP
@@ -362,7 +378,10 @@ def time_machine_backtest():
         return jsonify(result)
     except Exception as e:
         print(f"Backtest Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        # Log the real exception server-side, but don't hand its text back to
+        # the client — it can contain library/file-path internals that are
+        # of no use to the app and only useful as recon for an attacker.
+        return jsonify({"error": "Could not run the backtest for this ticker/date range."}), 500
 
 
 # =====================================================================
@@ -789,8 +808,13 @@ def _try_gemini(prompt, model="gemini-flash-latest"):
     # here without the client giving up first.
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"Content-Type": "application/json"},
-        params={"key": GEMINI_API_KEY},
+        # The key goes in a header, not a "?key=..." query param — Sentry's
+        # requests/stdlib integration (enabled automatically alongside
+        # FlaskIntegration above) captures the outgoing request URL,
+        # including its query string, as breadcrumb data on any error. A key
+        # in the URL would ride along into Sentry the first time this call
+        # ever fails after SENTRY_DSN gets configured; a header doesn't.
+        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
         json={"contents": [{"parts": [{"text": prompt}]}]},
         timeout=55,
     )
@@ -806,8 +830,8 @@ def _try_gemini_vision(prompt, image_base64, mime_type, model="gemini-flash-late
     # through Gemini; there's no fallback chain here like /api/assistant.
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"Content-Type": "application/json"},
-        params={"key": GEMINI_API_KEY},
+        # See _try_gemini() above for why the key is a header, not a query param.
+        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
         json={"contents": [{"parts": [
             {"text": prompt},
             {"inline_data": {"mime_type": mime_type, "data": image_base64}},
@@ -1179,7 +1203,9 @@ def dividend_history():
         })
     except Exception as e:
         print(f"Dividend History Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        # See the /api/backtest error handler for why this doesn't return
+        # str(e) directly to the client.
+        return jsonify({"error": "Could not fetch dividend history for this ticker."}), 500
 
 
 @app.route('/api/stock', methods=['GET'])
@@ -1307,7 +1333,9 @@ def get_stock_data():
 
     except Exception as e:
         print(f"API Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        # See the /api/backtest error handler for why this doesn't return
+        # str(e) directly to the client.
+        return jsonify({"error": "Could not fetch data for this ticker."}), 500
 
 
 # =====================================================================
@@ -1412,7 +1440,11 @@ def admin_users():
 # =====================================================================
 @app.route('/api/admin/users/<uid>/promote', methods=['POST'])
 def admin_promote_user(uid):
-    auth_error = _require_admin_user()
+    # _require_admin_write() (not just _require_admin_user()) so granting
+    # admin access has at least the same defense-in-depth as editing quiz
+    # content — a hard BACKEND_API_KEY requirement, not just the Firebase
+    # admin check. Promoting a user arguably outranks content CRUD.
+    auth_error = _require_admin_write()
     if auth_error:
         return auth_error
     _firestore_admin.collection('users').document(uid).set(
@@ -1422,7 +1454,7 @@ def admin_promote_user(uid):
 
 @app.route('/api/admin/users/<uid>/demote', methods=['POST'])
 def admin_demote_user(uid):
-    auth_error = _require_admin_user()
+    auth_error = _require_admin_write()
     if auth_error:
         return auth_error
     caller_uid = _verified_uid_or_none()

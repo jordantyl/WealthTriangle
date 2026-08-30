@@ -17,6 +17,13 @@ class _TycoonLobbyScreenState extends State<TycoonLobbyScreen> {
   final TextEditingController _roomCtrl = TextEditingController();
   bool _isConnecting = false;
 
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _roomCtrl.dispose();
+    super.dispose();
+  }
+
   // ✅ UPDATED: Now shows the Mode Selector instead of auto-starting
   void _playSolo() {
     _showModeSelection(

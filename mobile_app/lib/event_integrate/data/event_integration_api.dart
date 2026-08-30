@@ -18,11 +18,18 @@ class EventIntegrationService {
   // method's return type.
   bool lastFetchWasMock = false;
 
+  // How many tickers were silently dropped by the take(8) cap below on the
+  // most recent call — was previously untracked, so a user with more than
+  // 8 combined held+watchlist tickers had events fetched for only some of
+  // them with no indication anything was left out.
+  int lastSkippedTickerCount = 0;
+
   Future<List<EconomicEvent>> fetchEventsForWatchlist(
       List<String> tickers) async {
     final List<EconomicEvent> events = [];
 
     // Bumped from 5 since callers now pass held + watchlist tickers combined.
+    lastSkippedTickerCount = tickers.length > 8 ? tickers.length - 8 : 0;
     for (final ticker in tickers.take(8)) {
       try {
         final response = await http

@@ -10,8 +10,12 @@ class FieldSpec {
   final String label;
   final FieldType type;
   final String? hint;
+  // Was documented only via hint text ("... — required") with nothing
+  // actually enforcing it — the editor would silently accept and save an
+  // empty Scenario ID or an empty Asset Impact map with no error shown.
+  final bool required;
 
-  const FieldSpec(this.key, this.label, this.type, {this.hint});
+  const FieldSpec(this.key, this.label, this.type, {this.hint, this.required = false});
 }
 
 class ContentSchema {
@@ -27,13 +31,15 @@ final Map<String, ContentSchema> contentSchemas = {
     label: 'Scenarios',
     titleOf: (d) => (d['title'] as String?)?.isNotEmpty == true ? d['title'] : '(untitled)',
     fields: const [
-      FieldSpec('id', 'Scenario ID', FieldType.text, hint: 'stable ID, e.g. scn_007 — required'),
+      FieldSpec('id', 'Scenario ID', FieldType.text,
+          hint: 'stable ID, e.g. scn_007 — required', required: true),
       FieldSpec('title', 'Title', FieldType.text),
       FieldSpec('newsHeadline', 'News Headline', FieldType.text),
       FieldSpec('newsDescription', 'News Description', FieldType.multilineText),
       FieldSpec('aiFeedback', 'AI Feedback', FieldType.multilineText),
       FieldSpec('assetImpact', 'Asset Impact', FieldType.numberMap,
-          hint: 'one per line, e.g. Tech: 1.3 (1.0 = no change) — required, at least one line'),
+          hint: 'one per line, e.g. Tech: 1.3 (1.0 = no change) — required, at least one line',
+          required: true),
     ],
   ),
   'academy_quizzes': ContentSchema(

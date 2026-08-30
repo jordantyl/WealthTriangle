@@ -63,10 +63,29 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && request.resource.data.hostId == request.auth.uid;
       allow update: if request.auth != null
-                    && (resource.data.hostId == request.auth.uid
-                        || resource.data.guestId == request.auth.uid
-                        // joining: guest slot must currently be empty
-                        || (resource.data.guestId == "" && request.resource.data.guestId == request.auth.uid));
+                    && (
+                      // An existing participant (host or guest) may update
+                      // freely — the app's own move-submission and
+                      // round-advance logic writes several fields together
+                      // in one call (host/guest cash+investments+locked,
+                      // currentRound), and round-advance is already guarded
+                      // client-side by a Firestore transaction that checks
+                      // currentRound hasn't moved since it was read.
+                      resource.data.hostId == request.auth.uid
+                      || resource.data.guestId == request.auth.uid
+                      // Joining an open room: guest slot must currently be
+                      // empty, and — unlike the branches above — the write
+                      // may ONLY touch the join fields. Previously this had
+                      // no field restriction at all, so a joining guest's
+                      // single `update()` call could rewrite ANY other
+                      // field in the same document (the opponent's score,
+                      // hostId, etc.) alongside legitimately claiming the
+                      // guest slot.
+                      || (resource.data.guestId == ""
+                          && request.resource.data.guestId == request.auth.uid
+                          && request.resource.data.diff(resource.data).affectedKeys()
+                             .hasOnly(['guestId', 'guestName', 'status']))
+                    );
       allow delete: if false;
     }
   }

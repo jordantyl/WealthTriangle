@@ -349,9 +349,21 @@ class WealthState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Was completely invisible on failure — every setter below calls
+  // _pushToCloud() without awaiting or catching it, so an offline/permission
+  // write failure was silently swallowed: the in-memory value (and thus the
+  // UI) already looked "saved" with nothing to indicate the change never
+  // actually reached Firestore. Now exposed here so a screen that cares
+  // (Profile, where every one of these setters is actually exercised via
+  // UI) can show it and offer a retry, without every call site needing to
+  // start awaiting/catching a previously-fire-and-forget void method.
+  String? _lastSyncError;
+  String? get lastSyncError => _lastSyncError;
+
   Future<void> _pushToCloud() async {
     User? user = _auth.currentUser;
-    if (user != null) {
+    if (user == null) return;
+    try {
       await _db.collection('users').doc(user.uid).set({
         'salary': _monthlySalary,
         'expenses': _monthlyExpenses,
@@ -365,7 +377,24 @@ class WealthState extends ChangeNotifier {
         'preferredSectors': _preferredSectors,
         'lastUpdated': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      if (_lastSyncError != null) {
+        _lastSyncError = null;
+        notifyListeners();
+      }
+    } catch (e) {
+      _lastSyncError = "Couldn't save your latest change — check your connection.";
+      notifyListeners();
     }
+  }
+
+  /// Lets a "sync failed" banner offer a real retry instead of just a
+  /// dismiss, since the underlying write is otherwise silently dropped.
+  Future<void> retrySync() => _pushToCloud();
+
+  void dismissSyncError() {
+    if (_lastSyncError == null) return;
+    _lastSyncError = null;
+    notifyListeners();
   }
 
   void updateSalary(double value) {

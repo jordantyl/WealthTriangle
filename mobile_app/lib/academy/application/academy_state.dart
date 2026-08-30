@@ -719,41 +719,58 @@ class AcademyState extends ChangeNotifier {
 
   Future<void> advanceBattleRound(int currentRound) async {
     if (_currentBattleId == null) return;
+    final ref = _db.collection('tycoon_battles').doc(_currentBattleId);
 
-    final doc =
-        await _db.collection('tycoon_battles').doc(_currentBattleId).get();
-    if (!doc.exists) return;
+    // Only the host's client calls this (TycoonBattleScreen/MarketTycoonScreen
+    // only show the "NEXT ROUND" button to the host), but nothing previously
+    // stopped a fast double-tap from firing this twice before the first
+    // call's Firestore write landed and the UI rebuilt — each call re-read
+    // the same pre-advance cash/round and computed the round's profit/loss
+    // from it independently, so a double-tap silently double-applied that
+    // round's result. Wrapping the read+write in a transaction and checking
+    // currentRound still matches what's stored makes a stale/duplicate call
+    // a no-op instead.
+    await _db.runTransaction((transaction) async {
+      final doc = await transaction.get(ref);
+      if (!doc.exists) return;
 
-    var data = doc.data() as Map<String, dynamic>;
-    List<dynamic> scenarioIds = data['scenarioIds'];
-    if (currentRound >= scenarioIds.length) return;
+      var data = doc.data() as Map<String, dynamic>;
+      if (data['currentRound'] != currentRound) {
+        // Already advanced by an earlier (still in-flight or completed)
+        // call — nothing left to do.
+        return;
+      }
 
-    String scenarioId = scenarioIds[currentRound];
-    var scenario = _scenarios.firstWhere((s) => s.id == scenarioId,
-        orElse: () => _scenarios[0]);
+      List<dynamic> scenarioIds = data['scenarioIds'];
+      if (currentRound >= scenarioIds.length) return;
 
-    Map<String, dynamic> hostInv = data['hostInvestments'] ?? {};
-    double hostNewCash = (data['hostCash'] as num).toDouble();
-    hostInv.forEach((asset, amount) {
-      double multiplier = scenario.impactFor(asset);
-      hostNewCash += (amount * multiplier) - amount;
-    });
+      String scenarioId = scenarioIds[currentRound];
+      var scenario = _scenarios.firstWhere((s) => s.id == scenarioId,
+          orElse: () => _scenarios[0]);
 
-    Map<String, dynamic> guestInv = data['guestInvestments'] ?? {};
-    double guestNewCash = (data['guestCash'] as num).toDouble();
-    guestInv.forEach((asset, amount) {
-      double multiplier = scenario.impactFor(asset);
-      guestNewCash += (amount * multiplier) - amount;
-    });
+      Map<String, dynamic> hostInv = data['hostInvestments'] ?? {};
+      double hostNewCash = (data['hostCash'] as num).toDouble();
+      hostInv.forEach((asset, amount) {
+        double multiplier = scenario.impactFor(asset);
+        hostNewCash += (amount * multiplier) - amount;
+      });
 
-    await _db.collection('tycoon_battles').doc(_currentBattleId).update({
-      "currentRound": currentRound + 1,
-      "hostLocked": false,
-      "guestLocked": false,
-      "hostCash": hostNewCash,
-      "guestCash": guestNewCash,
-      "hostInvestments": {},
-      "guestInvestments": {},
+      Map<String, dynamic> guestInv = data['guestInvestments'] ?? {};
+      double guestNewCash = (data['guestCash'] as num).toDouble();
+      guestInv.forEach((asset, amount) {
+        double multiplier = scenario.impactFor(asset);
+        guestNewCash += (amount * multiplier) - amount;
+      });
+
+      transaction.update(ref, {
+        "currentRound": currentRound + 1,
+        "hostLocked": false,
+        "guestLocked": false,
+        "hostCash": hostNewCash,
+        "guestCash": guestNewCash,
+        "hostInvestments": {},
+        "guestInvestments": {},
+      });
     });
   }
 

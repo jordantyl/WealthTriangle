@@ -36,6 +36,19 @@ class _StockDashboardState extends State<StockDashboard> {
   String _selectedFilter = "All";
   String _selectedPeriod = '1y';
   Timer? _debounceTimer;          // ✅ ADDED
+  // Set by the Autocomplete's fieldViewBuilder so the manual-entry "Analyze"
+  // button below can read whatever the user typed, even if the dropdown
+  // never returned a matching suggestion (previously: onSelected was the
+  // ONLY path into _runSimulation, so a ticker the search API didn't
+  // resolve — e.g. auth hiccup, an obscure symbol — had literally no way
+  // to be analyzed, not even a validation error, just nothing happened).
+  TextEditingController? _tickerFieldController;
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
 
   Color _getColorFromString(String colorName) {
     switch (colorName.toLowerCase()) {
@@ -284,20 +297,28 @@ class _StockDashboardState extends State<StockDashboard> {
             ),
             const SizedBox(height: 15),
 
-            // ✅ FIXED Autocomplete with debouncing
+            // Debounce with a real cancelable Timer + Completer — the
+            // previous version canceled a `_debounceTimer` that was never
+            // actually assigned anywhere, so every keystroke independently
+            // scheduled its own Future.delayed(300ms, _searchStocks(...)):
+            // typing "AAPL" fired 4 real HTTP calls instead of 1 (harmless
+            // to correctness, since Autocomplete discards stale out-of-order
+            // results, but wasteful load on every keystroke). Now a new
+            // keystroke actually cancels the pending Timer before it fires,
+            // so only the last keystroke in a burst ever calls _searchStocks.
             Autocomplete<Map<String, String>>(
-              key: ValueKey(_selectedFilter), 
-              optionsBuilder: (TextEditingValue textEditingValue) async {
+              key: ValueKey(_selectedFilter),
+              optionsBuilder: (TextEditingValue textEditingValue) {
+                _debounceTimer?.cancel();
                 if (textEditingValue.text.isEmpty) {
-                  _debounceTimer?.cancel();
                   return const Iterable<Map<String, String>>.empty();
                 }
-                _debounceTimer?.cancel();
-                // Wait 300ms before searching
-                final result = await Future.delayed(const Duration(milliseconds: 300), () {
-                  return _searchStocks(textEditingValue.text);
+                final completer = Completer<Iterable<Map<String, String>>>();
+                _debounceTimer = Timer(const Duration(milliseconds: 300), () async {
+                  final result = await _searchStocks(textEditingValue.text);
+                  if (!completer.isCompleted) completer.complete(result);
                 });
-                return result;
+                return completer.future;
               },
               optionsViewBuilder: (context, onSelected, options) {
                 return Align(
@@ -328,10 +349,13 @@ class _StockDashboardState extends State<StockDashboard> {
               onSelected: (Map<String, String> selection) { _runSimulation(selection['symbol']!); },
               displayStringForOption: (Map<String, String> option) => option['symbol']!,
               fieldViewBuilder: (context, controller, focusNode, onEditingComplete) {
+                _tickerFieldController = controller;
                 return TextField(
                   controller: controller,
                   focusNode: focusNode,
                   onEditingComplete: onEditingComplete,
+                  textCapitalization: TextCapitalization.characters,
+                  onSubmitted: (value) => _analyzeTypedTicker(),
                   decoration: InputDecoration(
                     labelText: "Search ${_selectedFilter == 'All' ? 'Global' : _selectedFilter} Stocks...",
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -339,6 +363,15 @@ class _StockDashboardState extends State<StockDashboard> {
                   ),
                 );
               },
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _analyzeTypedTicker,
+                icon: const Icon(Icons.analytics_outlined),
+                label: const Text("Analyze Ticker"),
+              ),
             ),
 
             const SizedBox(height: 15),
@@ -748,6 +781,23 @@ class _StockDashboardState extends State<StockDashboard> {
     );
   }
 
+  /// Runs an analysis for whatever the user has typed in the search field,
+  /// even if the autocomplete dropdown never returned/showed a matching
+  /// suggestion for them to tap (the only path into _runSimulation before
+  /// this button existed). _runSimulation's own error handling (timeout
+  /// message, red error banner) already covers a ticker that doesn't
+  /// actually exist, so no separate format validation is needed here.
+  void _analyzeTypedTicker() {
+    final typed = _tickerFieldController?.text.trim() ?? '';
+    if (typed.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Type a ticker symbol to analyze first.')));
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    _runSimulation(typed.toUpperCase());
+  }
+
   Future<void> _runSimulation(String ticker) async {
     setState(() {
       _isLoading = true;
@@ -887,14 +937,29 @@ class _StockDashboardState extends State<StockDashboard> {
             ),
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildAttributeChip("Volatility", data.volatilityLabel, getVolatilityColor(data.volatilityLabel)),
-              _buildAttributeChip("Max Drawdown", "${data.maxDrawdown.toStringAsFixed(1)}%", data.maxDrawdown < -30 ? Colors.redAccent : Colors.orange),
-              _buildAttributeChip("Settlement", data.settlementTerm, Colors.blueAccent),
-              _buildAttributeChip("Dividend Yield", "${data.dividendYield.toStringAsFixed(1)}%", Colors.green),
-            ],
+          // Wrapped in a horizontal scroll now that this is 5 chips, not 4 —
+          // Liquidity was previously missing entirely from this row even
+          // though it's one of the three Iron Triangle pillars (Risk,
+          // Return, Liquidity) and getLiquidityColor() already existed for
+          // exactly this chip, just never wired in.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              // spaceAround needs a bounded width to distribute; inside a
+              // horizontally-scrolling (unbounded) Row it's a no-op, so
+              // spacing is explicit here instead.
+              children: [
+                _buildAttributeChip("Volatility", data.volatilityLabel, getVolatilityColor(data.volatilityLabel)),
+                const SizedBox(width: 14),
+                _buildAttributeChip("Max Drawdown", "${data.maxDrawdown.toStringAsFixed(1)}%", data.maxDrawdown < -30 ? Colors.redAccent : Colors.orange),
+                const SizedBox(width: 14),
+                _buildAttributeChip("Liquidity", data.liquidityLabel, getLiquidityColor(data.liquidityLabel)),
+                const SizedBox(width: 14),
+                _buildAttributeChip("Settlement", data.settlementTerm, Colors.blueAccent),
+                const SizedBox(width: 14),
+                _buildAttributeChip("Dividend Yield", "${data.dividendYield.toStringAsFixed(1)}%", Colors.green),
+              ],
+            ),
           ),
           const SizedBox(height: 8),
           Container(

@@ -14,6 +14,7 @@ class EventIntegrationState extends ChangeNotifier {
   EventType? _selectedFilter;
   bool _heldOnly = false;
   bool _isMockEvents = false;
+  int _skippedTickerCount = 0;
 
   List<EconomicEvent> get events => _events;
   bool get isLoading => _isLoading;
@@ -26,6 +27,9 @@ class EventIntegrationState extends ChangeNotifier {
   // demo content rather than real Yahoo data — user-created liquidity
   // events are always real regardless of this flag.
   bool get isMockEvents => _isMockEvents;
+  // >0 when the combined held+watchlist ticker set was larger than the
+  // fetch cap, so some tickers' events weren't fetched at all this load.
+  int get skippedTickerCount => _skippedTickerCount;
 
   List<EconomicEvent> get filteredEvents {
     var list = _events.where((e) => e.isUpcoming).toList();
@@ -68,6 +72,7 @@ class EventIntegrationState extends ChangeNotifier {
 
       final fetchedEvents = results[0] as List<EconomicEvent>;
       _isMockEvents = _api.lastFetchWasMock;
+      _skippedTickerCount = _api.lastSkippedTickerCount;
       _alertedEventIds = results[1] as Set<String>;
       final userEventsSnapshot = results[2] as QuerySnapshot?;
       // ✅ FIXED: this line was missing — liquiditySnapshot was used

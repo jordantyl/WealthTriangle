@@ -32,6 +32,13 @@ class _LoginScreenState extends State<LoginScreen> {
   String get _attemptsKey => 'failedAttempts_${_emailController.text.trim().toLowerCase()}';
   String get _lockoutKey => 'lockoutUntil_${_emailController.text.trim().toLowerCase()}';
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
   Future<bool> _isLockedOut() async {
     final prefs = await SharedPreferences.getInstance();
     final lockoutUntil = prefs.getInt(_lockoutKey) ?? 0;

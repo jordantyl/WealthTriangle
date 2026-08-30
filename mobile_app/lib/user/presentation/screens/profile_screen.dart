@@ -14,37 +14,56 @@ class ProfileScreen extends StatelessWidget {
 
   void _showEditDialog(BuildContext context, String title, double currentValue, Function(double) onSave) {
     final controller = TextEditingController(text: currentValue.toStringAsFixed(0));
+    // Was a plain AlertDialog whose SAVE button silently closed the dialog
+    // and did nothing at all when the input didn't parse (empty, non-
+    // numeric, etc.) — no indication of why, unlike income_screen.dart's
+    // "Add Side Hustle" dialog which shows an inline error for the same
+    // kind of bad input. StatefulBuilder lets this show the same feedback.
+    String? errorText;
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2D2D44),
-        title: Text("Update $title", style: const TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          style: const TextStyle(color: Colors.white),
-          autofocus: true,
-          decoration: InputDecoration(
-            prefixText: "RM ",
-            prefixStyle: const TextStyle(color: Colors.white),
-            labelText: "Enter Amount",
-            labelStyle: const TextStyle(color: Colors.grey),
-            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.blueAccent.withOpacity(0.5))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF2D2D44),
+          title: Text("Update $title", style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                autofocus: true,
+                decoration: InputDecoration(
+                  prefixText: "RM ",
+                  prefixStyle: const TextStyle(color: Colors.white),
+                  labelText: "Enter Amount",
+                  labelStyle: const TextStyle(color: Colors.grey),
+                  enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.blueAccent.withOpacity(0.5))),
+                ),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 10),
+                Text(errorText!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+              ],
+            ],
           ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL")),
-          ElevatedButton(
-            onPressed: () {
-              final val = double.tryParse(controller.text);
-              if (val != null) {
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL")),
+            ElevatedButton(
+              onPressed: () {
+                final val = double.tryParse(controller.text);
+                if (val == null || val < 0) {
+                  setDialogState(() => errorText = "Enter a valid amount.");
+                  return;
+                }
                 onSave(val);
-              }
-              Navigator.pop(ctx);
-            },
-            child: const Text("SAVE"),
-          )
-        ],
+                Navigator.pop(ctx);
+              },
+              child: const Text("SAVE"),
+            )
+          ],
+        ),
       ),
     );
   }
@@ -67,6 +86,37 @@ class ProfileScreen extends StatelessWidget {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
+            if (wealthState.lastSyncError != null)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 15),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_off, color: Colors.redAccent, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(wealthState.lastSyncError!,
+                          style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                    ),
+                    TextButton(
+                      onPressed: () => wealthState.retrySync(),
+                      child: const Text('Retry'),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
+                      onPressed: () => wealthState.dismissSyncError(),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ),
             // USER HEADER
             Center(
               child: GestureDetector(
@@ -382,6 +432,12 @@ class ProfileScreen extends StatelessWidget {
       text: wealthState.financialGoal?.toStringAsFixed(0) ?? '',
     );
     DateTime selectedDate = wealthState.goalDate ?? DateTime.now().add(const Duration(days: 365));
+    // Was silently doing nothing (just closing the dialog) when the typed
+    // amount didn't parse or wasn't positive — same silent-no-op pattern
+    // already fixed elsewhere (income_screen.dart's "Add Side Hustle"
+    // dialog); this dialog already used StatefulBuilder for the date
+    // picker, so showing an inline error just needed the same field.
+    String? errorText;
 
     showDialog(
       context: context,
@@ -426,6 +482,10 @@ class ProfileScreen extends StatelessWidget {
                   }
                 },
               ),
+              if (errorText != null) ...[
+                const SizedBox(height: 10),
+                Text(errorText!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+              ],
             ],
           ),
           actions: [
@@ -433,10 +493,12 @@ class ProfileScreen extends StatelessWidget {
             ElevatedButton(
               onPressed: () {
                 final goal = double.tryParse(controller.text);
-                if (goal != null && goal > 0) {
-                  wealthState.setFinancialGoal(goal, selectedDate);
-                  BadgeService.award(context, 'goal_setter');
+                if (goal == null || goal <= 0) {
+                  setDialogState(() => errorText = "Enter a valid goal amount greater than 0.");
+                  return;
                 }
+                wealthState.setFinancialGoal(goal, selectedDate);
+                BadgeService.award(context, 'goal_setter');
                 Navigator.pop(ctx);
               },
               child: const Text("SAVE"),

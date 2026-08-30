@@ -146,6 +146,18 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     'confirmation_needed': false,
   };
 
+  // Was previously identical to _connectionErrorResult — both a genuinely
+  // unreachable backend AND a rejected/expired auth token showed the same
+  // "make sure the backend server and Ollama are running" message, which
+  // sent a debugger looking at the wrong layer (confirmed by a real QA
+  // session that hit this exact confusion).
+  static const Map<String, dynamic> _authErrorResult = {
+    'action': 'chat',
+    'message':
+        "I couldn't verify your sign-in with the server. Try signing out and back in, then ask again.",
+    'confirmation_needed': false,
+  };
+
   Future<Map<String, dynamic>> processQuery(
     String userQuery, {
     List<Map<String, String>> history = const [],
@@ -163,6 +175,9 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return _parseActionResponse(data['response'] as String);
+      }
+      if (response.statusCode == 401) {
+        return _authErrorResult;
       }
     } catch (e) {
       print("Assistant Error: $e");
@@ -201,6 +216,9 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return _parseActionResponse(data['response'] as String);
+      }
+      if (response.statusCode == 401) {
+        return _authErrorResult;
       }
     } catch (e) {
       print("Assistant Vision Error: $e");

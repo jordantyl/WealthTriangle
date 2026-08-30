@@ -120,13 +120,33 @@ class _ContentDocEditorDialogState extends State<_ContentDocEditorDialog> {
     return result;
   }
 
+  String? _missingRequiredFieldError(Map<String, dynamic> data) {
+    for (final field in widget.schema.fields) {
+      if (!field.required) continue;
+      final value = data[field.key];
+      final isEmpty = switch (field.type) {
+        FieldType.text || FieldType.multilineText => (value as String).isEmpty,
+        FieldType.stringList => (value as List).isEmpty,
+        FieldType.numberMap => (value as Map).isEmpty,
+        FieldType.number || FieldType.boolean => false,
+      };
+      if (isEmpty) return '${field.label} is required.';
+    }
+    return null;
+  }
+
   Future<void> _save() async {
+    final data = _collectValues();
+    final missing = _missingRequiredFieldError(data);
+    if (missing != null) {
+      setState(() => _error = missing);
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      final data = _collectValues();
       if (widget.docId == null) {
         await AdminApi.createContentDoc(widget.collection, data);
       } else {

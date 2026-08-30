@@ -77,9 +77,10 @@ class SimulationHistoryScreen extends StatelessWidget {
                                   : Colors.redAccent)
                               .withOpacity(0.2),
                           child: Text(
-                            (data['stockTicker'] ?? '?')
-                                .toString()
-                                .substring(0, 1),
+                            () {
+                              final t = (data['stockTicker'] ?? '?').toString();
+                              return t.isEmpty ? '?' : t.substring(0, 1);
+                            }(),
                             style: TextStyle(
                                 color: isWin
                                     ? Colors.greenAccent

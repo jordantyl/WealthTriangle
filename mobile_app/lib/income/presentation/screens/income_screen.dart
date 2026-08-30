@@ -18,6 +18,9 @@ class _IncomeScreenState extends State<IncomeScreen> {
     final amountController = TextEditingController();
     // ✅ FIXED: was hardcoded to monthly — now the user can choose.
     bool isMonthly = true;
+    // Was: ADD silently did nothing on invalid input (empty name / amount
+    // <= 0) with no indication why. Now shown inline instead of guessing.
+    String? errorText;
 
     showDialog(
       context: context,
@@ -37,6 +40,11 @@ class _IncomeScreenState extends State<IncomeScreen> {
                   controller: amountController,
                   decoration: const InputDecoration(labelText: "Amount (RM)"),
                   keyboardType: TextInputType.number),
+              if (errorText != null) ...[
+                const SizedBox(height: 10),
+                Text(errorText!,
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+              ],
               const SizedBox(height: 15),
               // ✅ NEW: frequency selector
               Row(
@@ -66,12 +74,19 @@ class _IncomeScreenState extends State<IncomeScreen> {
             ElevatedButton(
               child: const Text("ADD"),
               onPressed: () {
-                final amount = double.tryParse(amountController.text) ?? 0;
-                if (nameController.text.isNotEmpty && amount > 0) {
-                  Provider.of<WealthState>(context, listen: false)
-                      .addIncomeSource(
-                          nameController.text, amount, isMonthly);
+                final name = nameController.text.trim();
+                final amountText = amountController.text.trim();
+                final amount = double.tryParse(amountText);
+                if (name.isEmpty) {
+                  setDialogState(() => errorText = "Enter a name for this income source.");
+                  return;
                 }
+                if (amount == null || amount <= 0) {
+                  setDialogState(() => errorText = "Enter an amount greater than 0.");
+                  return;
+                }
+                Provider.of<WealthState>(context, listen: false)
+                    .addIncomeSource(name, amount, isMonthly);
                 Navigator.pop(ctx);
               },
             )

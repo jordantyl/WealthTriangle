@@ -15,6 +15,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _isLoading = false;
   bool _emailSent = false;
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
   Future<void> _sendResetEmail() async {
     final email = _emailController.text.trim();
     if (email.isEmpty || !email.contains('@')) {

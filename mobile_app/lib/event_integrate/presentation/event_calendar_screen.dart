@@ -111,6 +111,7 @@ class _EventCalendarScreenState extends State<EventCalendarScreen>
     return Column(
       children: [
         if (state.isMockEvents) _buildDemoDataBanner(),
+        if (state.skippedTickerCount > 0) _buildSkippedTickersBanner(state.skippedTickerCount),
         _buildHeldOnlyToggle(state),
         _buildEventTypeFilter(state),
         _buildCountdownBanner(state),
@@ -180,6 +181,31 @@ class _EventCalendarScreenState extends State<EventCalendarScreen>
             child: Text(
               'Showing demo earnings/dividend events — backend calendar API isn\'t reachable or configured.',
               style: TextStyle(color: Colors.amber, fontSize: 11),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSkippedTickersBanner(int count) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.blueGrey.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, color: Colors.blueGrey, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Showing events for your first 8 held/watchlist tickers — $count more ${count == 1 ? "isn't" : "aren't"} included.',
+              style: const TextStyle(color: Colors.blueGrey, fontSize: 11),
             ),
           ),
         ],

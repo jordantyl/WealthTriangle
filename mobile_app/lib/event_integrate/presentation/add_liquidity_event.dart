@@ -17,6 +17,13 @@ class _AddLiquidityEventScreenState extends State<AddLiquidityEventScreen> {
   String _type = 'fixed_deposit';
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 90));
 
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _amountController.dispose();
+    super.dispose();
+  }
+
   Future<void> _saveEvent() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -66,7 +73,17 @@ class _AddLiquidityEventScreenState extends State<AddLiquidityEventScreen> {
                 controller: _amountController,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(labelText: 'Amount (\$)'),
-                validator: (v) => v!.isEmpty ? 'Enter amount' : null,
+                // Was just `v!.isEmpty ? 'Enter amount' : null` — a non-numeric
+                // value (e.g. "abc") passed this check and then crashed
+                // double.parse() in _saveEvent with an uncaught
+                // FormatException, since keyboardType is only a soft hint on
+                // Flutter Web and doesn't actually restrict what's typed.
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Enter amount';
+                  final amount = double.tryParse(v);
+                  if (amount == null || amount <= 0) return 'Enter a valid amount greater than 0';
+                  return null;
+                },
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(

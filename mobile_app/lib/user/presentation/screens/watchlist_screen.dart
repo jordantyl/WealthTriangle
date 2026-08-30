@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../../application/wealth_state.dart';
 import '../../../investment/presentation/screens/ticker_search_field.dart';
+import '../../../shared/backend_headers.dart';
 
 /// Dedicated watchlist management screen (Report request: "make watchlist
 /// visible, transparent" + let the user manage it themselves). Previously
@@ -13,6 +16,97 @@ import '../../../investment/presentation/screens/ticker_search_field.dart';
 class WatchlistScreen extends StatelessWidget {
   const WatchlistScreen({super.key});
 
+  static final RegExp _tickerFormat = RegExp(r'^[A-Z0-9.\-]{1,10}$');
+
+  /// Checks the typed ticker against the same live /api/search endpoint the
+  /// autocomplete dropdown uses, so a manually-typed symbol that never
+  /// resolved to a dropdown suggestion still gets checked instead of being
+  /// written straight to Firestore unverified (previously: typing e.g.
+  /// "ZZZZINVALID999" and tapping Add Ticker added it with zero validation
+  /// — no format check, no existence check — and it would sit in the
+  /// watchlist forever silently failing downstream in Market Intel/Events).
+  /// Returns null if the backend couldn't be reached (caller falls back to
+  /// asking the user directly rather than hard-blocking on a network hiccup).
+  Future<bool?> _tickerExistsInSearch(String ticker) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$defaultBackendBaseUrl/api/search?q=${Uri.encodeComponent(ticker)}'),
+            headers: await authedBackendHeaders(),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+      final List data = json.decode(response.body);
+      return data.any((item) =>
+          (item['symbol']?.toString().toUpperCase() ?? '') == ticker);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _addTickerValidated(
+    BuildContext screenContext,
+    BuildContext sheetContext,
+    WealthState wealthState,
+    String rawTicker,
+    void Function(bool) setChecking,
+  ) async {
+    final ticker = rawTicker.trim().toUpperCase();
+    if (ticker.isEmpty) return;
+
+    if (!_tickerFormat.hasMatch(ticker)) {
+      ScaffoldMessenger.of(screenContext).showSnackBar(SnackBar(content: Text(
+          "'$ticker' doesn't look like a real ticker symbol — use letters/numbers only, up to 10 characters.")));
+      return;
+    }
+
+    setChecking(true);
+    final found = await _tickerExistsInSearch(ticker);
+    // The bottom sheet can be dismissed (tap outside / swipe down) while
+    // this network call is in flight — calling setChecking (setState on the
+    // StatefulBuilder) after that would throw "setState() called after
+    // dispose()", so bail out before touching sheet-local state once it's
+    // no longer mounted.
+    if (!sheetContext.mounted) return;
+    setChecking(false);
+
+    if (found == true) {
+      await wealthState.addToWatchlist(ticker);
+      if (sheetContext.mounted) Navigator.pop(sheetContext);
+      return;
+    }
+
+    // found == false (search ran, no match) or null (search unreachable) —
+    // either way, don't silently accept it: ask instead of hard-blocking,
+    // since a network hiccup or an obscure/newly-listed symbol shouldn't
+    // permanently lock a legitimate ticker out.
+    if (!sheetContext.mounted) return;
+    final message = found == false
+        ? "We couldn't find '$ticker' in stock search. Add it anyway?"
+        : "Couldn't verify '$ticker' right now (search unreachable). Add it anyway?";
+    final confirmed = await showDialog<bool>(
+      context: sheetContext,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Unrecognized Ticker'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Add Anyway'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await wealthState.addToWatchlist(ticker);
+      if (sheetContext.mounted) Navigator.pop(sheetContext);
+    }
+  }
+
   Future<void> _showAddDialog(BuildContext context, WealthState wealthState) async {
     final controller = TextEditingController();
     await showModalBottomSheet(
@@ -20,40 +114,53 @@ class WatchlistScreen extends StatelessWidget {
       isScrollControlled: true,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       builder: (sheetContext) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('Add to Watchlist',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 15),
-              TickerSearchField(
-                controller: controller,
-                onSelected: (symbol) async {
-                  await wealthState.addToWatchlist(symbol);
-                  if (sheetContext.mounted) Navigator.pop(sheetContext);
-                },
+        bool checking = false;
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
               ),
-              const SizedBox(height: 15),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.add),
-                label: const Text('Add Ticker'),
-                onPressed: () async {
-                  final ticker = controller.text.trim();
-                  if (ticker.isEmpty) return;
-                  await wealthState.addToWatchlist(ticker);
-                  if (sheetContext.mounted) Navigator.pop(sheetContext);
-                },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Add to Watchlist',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 15),
+                  TickerSearchField(
+                    controller: controller,
+                    onSelected: (symbol) async {
+                      await wealthState.addToWatchlist(symbol);
+                      if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    },
+                  ),
+                  const SizedBox(height: 15),
+                  ElevatedButton.icon(
+                    icon: checking
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.add),
+                    label: Text(checking ? 'Checking...' : 'Add Ticker'),
+                    onPressed: checking
+                        ? null
+                        : () => _addTickerValidated(
+                              context,
+                              sheetContext,
+                              wealthState,
+                              controller.text,
+                              (v) => setSheetState(() => checking = v),
+                            ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );

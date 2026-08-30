@@ -52,9 +52,6 @@ class _MarketTycoonScreenState extends State<MarketTycoonScreen> {
     "Cash": 0,   // Liquid, No Return
   };
 
-  // Track previous event to show popups
-  String _lastEventResult = "";
-
   @override
   void initState() {
     super.initState();
