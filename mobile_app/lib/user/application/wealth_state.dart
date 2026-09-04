@@ -326,7 +326,21 @@ class WealthState extends ChangeNotifier {
         _trianglePreference = TrianglePreference.balanced;
       }
     } catch (e) {
+      // The financial fields' in-memory defaults (line 29-32 above) are
+      // realistic-looking placeholder numbers, not zeros — fine as a
+      // starting point before the first successful sync, but if THIS sync
+      // fails (network blip, permission hiccup) they're left untouched and
+      // get shown on Home's Financial Snapshot card as if they were the
+      // user's real data, with a plausible-looking computed Safety%% and
+      // risk profile and no indication any of it is fake. Reset to the same
+      // safe/empty defaults the "no doc yet" branch above already uses, and
+      // surface the failure the same way _pushToCloud() already does, so
+      // Profile's existing sync-error banner picks it up.
       print("Failed to load wealth profile: $e");
+      _monthlySalary = 0.0;
+      _monthlyExpenses = 0.0;
+      _currentSavings = 0.0;
+      _lastSyncError = "Couldn't load your saved data — check your connection.";
     }
 
     try {

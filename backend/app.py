@@ -1309,7 +1309,22 @@ def get_stock_data():
 
         # NOTE: yfinance now returns dividendYield already as a percentage
         # (e.g. 2.58 meaning 2.58%), not a fraction — do not multiply by 100.
-        dividend_yield = stock.info.get("dividendYield", 0) or 0.0
+        #
+        # stock.info hits yfinance's separate quoteSummary scrape endpoint,
+        # not the .history() one everything above already succeeded on —
+        # confirmed live (2026-09-05) that Yahoo intermittently fails just
+        # this call for specific tickers (AAPL, MSFT) from the deployed
+        # Render instance's IP while .history() keeps working fine for the
+        # same tickers seconds apart, and the same .info call succeeds from
+        # a different IP. Letting that flakiness reach the bare `except`
+        # below discarded an otherwise fully-computed response (price, RSI,
+        # MACD, Monte Carlo, historical backtest) just because this one
+        # supplementary field's fetch hiccuped — isolate it instead.
+        try:
+            dividend_yield = stock.info.get("dividendYield", 0) or 0.0
+        except Exception as e:
+            print(f"dividendYield fetch failed for {ticker}: {e}")
+            dividend_yield = 0.0
 
         return jsonify({
             "symbol": ticker,

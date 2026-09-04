@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'home_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -46,17 +47,31 @@ class _SignupScreenState extends State<SignupScreen> {
       });
 
       if (mounted) {
-        // createUserWithEmailAndPassword() already signs the new user in —
-        // main.dart's root StreamBuilder(authStateChanges()) swaps straight
-        // to HomeScreen the instant that fires, racing (and usually beating)
-        // this screen's own Navigator.pop(). The old "Please Login" message
-        // was therefore false by the time — or before — it appeared: the
-        // user was already past login. Message now matches what actually
-        // happens; the redundant pop() (fighting a Navigator that's already
-        // being replaced) is gone rather than fixed, since the auth-state
-        // rebuild is what actually performs the transition.
+        // Explicit navigation, matching how login_screen.dart's own
+        // _signIn()/_loginWithGoogle() already get to HomeScreen from this
+        // same file. This used to rely on main.dart's root
+        // StreamBuilder(authStateChanges()) swapping route "/" underneath
+        // once sign-in fired, with just a pop() to reveal it — but that
+        // only works if route "/" still IS the StreamBuilder. It isn't
+        // after a logout: profile_screen.dart's LOG OUT handler calls
+        // Navigator.pushAndRemoveUntil(... LoginScreen() ..., (route) =>
+        // false), which discards the StreamBuilder-based route entirely and
+        // replaces it with a bare, non-reactive LoginScreen. Confirmed live,
+        // on-device: logging out and signing up again left the app stuck on
+        // this Create Account screen after a real, successful signup.
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Account created! Taking you to your dashboard...")));
+        // pushAndRemoveUntil, not pushReplacement: this screen was reached
+        // by pushing on top of LoginScreen, so a plain pushReplacement only
+        // swaps the top entry and leaves LoginScreen underneath — confirmed
+        // live, on-device, that leaves Home with a stray back button that
+        // pops to a stale, already-signed-in login form. Clearing the whole
+        // stack (same pattern profile_screen.dart's LOG OUT uses) avoids it.
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          (route) => false,
+        );
       }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
