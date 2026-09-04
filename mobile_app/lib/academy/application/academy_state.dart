@@ -92,6 +92,22 @@ class AcademyState extends ChangeNotifier {
     _checkAdminStatus();
   }
 
+  /// Resets every per-user academy field back to fresh-account defaults.
+  /// Called at the start of fetchUserData() so that switching signed-in
+  /// users (AcademyState is a single long-lived provider — never recreated
+  /// on sign-in/sign-out within one app session) never leaves the previous
+  /// user's level/XP/virtual cash/completed lessons/risk profile/admin flag
+  /// visible, even transiently, while the newly-signed-in user's real data
+  /// (or lack of any, for a brand-new account) is fetched from Firestore.
+  void _resetPerUserProgress() {
+    _level = 1;
+    _xp = 0;
+    _virtualCash = 10000;
+    _completedLessonIds = {};
+    _riskProfile = "Conservative";
+    _isAdmin = false;
+  }
+
   /// Public re-check, for callers (e.g. the web admin app) constructed
   /// before Firebase Auth resolves the signed-in user — the constructor's
   /// own _checkAdminStatus() call would otherwise run with no ID token yet
@@ -331,6 +347,9 @@ class AcademyState extends ChangeNotifier {
         _virtualCash = (data['virtualCash'] ?? 10000).toDouble();
         _completedLessonIds = Set<String>.from(data['completedLessons'] ?? []);
       }
+      // else: brand-new account with no stats doc yet — the caller
+      // (constructor / fetchUserData()) already reset these fields to
+      // defaults, so there's nothing stale left to clear here.
       notifyListeners();
     } catch (e) {
       print("Error loading stats: $e");
@@ -341,6 +360,7 @@ class AcademyState extends ChangeNotifier {
   /// the old learning_path_screen.dart behavior where completion lived only
   /// in local widget state (reset on restart) and XP was never actually added.
   Future<void> completeLesson(Lesson lesson) async {
+    await _awaitPendingUserDataLoad();
     if (_completedLessonIds.contains(lesson.id)) return;
     _completedLessonIds.add(lesson.id);
     _xp += lesson.xpReward;
@@ -349,6 +369,7 @@ class AcademyState extends ChangeNotifier {
   }
 
   Future<void> saveTycoonResult(double finalCash) async {
+    await _awaitPendingUserDataLoad();
     double profit = finalCash - 10000;
     int xpGained = profit > 0 ? (profit / 10).toInt() : 10;
     _virtualCash = finalCash;
@@ -360,6 +381,7 @@ class AcademyState extends ChangeNotifier {
   Future<void> saveQuizResult(int finalScore) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    await _awaitPendingUserDataLoad();
 
     String determinedProfile = 'Balanced';
     if (finalScore >= 400) {
@@ -807,10 +829,56 @@ class AcademyState extends ChangeNotifier {
     }
   }
 
+  /// Full reload of everything specific to whichever user is currently
+  /// signed in: academy stats (level/XP/virtual cash/completed lessons),
+  /// risk profile, and admin status. Called from home_screen.dart's
+  /// initState() on every sign-in — not just app startup — because
+  /// AcademyState is a single long-lived provider (created once in
+  /// main.dart) that's never recreated when the signed-in user changes
+  /// within one app session.
+  ///
+  /// This used to only refresh _riskProfile, leaving _level/_xp/
+  /// _virtualCash/_completedLessonIds/_isAdmin populated from whichever
+  /// user was signed in when the app/provider was first created. A second
+  /// user signing in later would see the first user's leftover progress
+  /// and admin UI, and completing a lesson would save the first user's
+  /// stale numbers into the second user's real Firestore doc. Resetting to
+  /// defaults up front (via _resetPerUserProgress()) — before reloading —
+  /// means there's no window where the previous user's data is visible,
+  /// even transiently, whether or not the new user already has a doc.
+  // Set for the duration of fetchUserData()'s reload so that completeLesson/
+  // saveTycoonResult/saveQuizResult — which can be triggered by user action
+  // while a slow reload is still in flight — wait for the real data to land
+  // before reading/mutating _xp/_level/etc., instead of building on the
+  // just-reset defaults and saving those over the user's actual progress.
+  Future<void>? _pendingUserDataLoad;
+
   Future<void> fetchUserData() async {
+    _resetPerUserProgress();
+    notifyListeners();
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final load = Future.wait([
+      _loadUserData(),
+      _checkAdminStatus(),
+      _loadRiskProfile(user),
+    ]);
+    _pendingUserDataLoad = load;
+    try {
+      await load;
+    } finally {
+      if (identical(_pendingUserDataLoad, load)) _pendingUserDataLoad = null;
+    }
+  }
+
+  Future<void> _awaitPendingUserDataLoad() async {
+    final pending = _pendingUserDataLoad;
+    if (pending != null) await pending;
+  }
+
+  Future<void> _loadRiskProfile(User user) async {
     try {
       var doc = await FirebaseFirestore.instance
           .collection('users')
@@ -827,6 +895,8 @@ class AcademyState extends ChangeNotifier {
         _riskProfile = rawProfile == 'Moderate' ? 'Balanced' : rawProfile;
         notifyListeners();
       }
+      // else: no users doc yet — fetchUserData()'s reset already put
+      // _riskProfile back to the default.
     } catch (e) {
       print("Error fetching Academy data: $e");
     }

@@ -25,6 +25,41 @@ def _fill_market_holiday_gaps(history_df):
     return filled.dropna(subset=['Close'])
 
 
+def calculate_rsi(series, period=14):
+    """
+    Standard 14-period Relative Strength Index (report FR-05, dashboard
+    technical indicators). A monotonically rising series approaches 100, a
+    flat series sits at the neutral midpoint, which fillna(50.0) also uses
+    to cover the first `period` rows where the rolling mean isn't defined
+    yet.
+    """
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50.0)
+
+
+def calculate_macd(series, fast=12, slow=26, signal=9):
+    """
+    Standard 12/26/9 MACD (report FR-05). Returns the MACD line, its signal
+    line, and their difference (the histogram) at the most recent point in
+    `series`; the histogram's sign flips at a MACD/signal crossover, which
+    is what calculate_momentum_score() reads as a momentum direction.
+    """
+    exp1 = series.ewm(span=fast, adjust=False).mean()
+    exp2 = series.ewm(span=slow, adjust=False).mean()
+    macd_line = exp1 - exp2
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return {
+        "macd": round(macd_line.iloc[-1], 2),
+        "signal": round(signal_line.iloc[-1], 2),
+        "histogram": round(histogram.iloc[-1], 2)
+    }
+
+
 def calculate_momentum_score(rsi_val, macd_histogram, current_price, ma50):
     """
     Blends the three technical indicators the report's abstract promises
@@ -56,8 +91,20 @@ def run_monte_carlo(ticker, history_df, years=1, simulations=100, momentum_score
     the stock's own daily volatility, so the nudge stays proportionate
     across low- and high-volatility tickers instead of using a fixed shift.
     """
+    _original_df = history_df
     history_df = _fill_market_holiday_gaps(history_df)
-    daily_returns = history_df['Close'].pct_change().dropna()
+
+    # NOTE: return/volatility statistics are computed from the ORIGINAL
+    # (non-gap-filled) close series, not the reindexed `history_df` above.
+    # Every holiday _fill_market_holiday_gaps() forward-fills in is an exact
+    # 0% "return" day; folding those synthetic flat days into pct_change()/
+    # .std() dilutes the true return variance and systematically understates
+    # volatility (and therefore the Safety score) for every ticker, not just
+    # an edge case. `history_df` (gap-filled) is still used below for
+    # last_price and the simulation's day-count stepping, which is what
+    # gap-filling exists for -- price *levels* at the boundary are unaffected
+    # by forward-filling, only return *variance* is.
+    daily_returns = _original_df['Close'].pct_change().dropna()
 
     if len(daily_returns) < 2:
         # Not enough price history to estimate drift/volatility (e.g. a
@@ -92,11 +139,18 @@ def run_monte_carlo(ticker, history_df, years=1, simulations=100, momentum_score
 
     daily_shocks = np.random.normal(drift_adjusted, stdev, (days_to_predict, simulations))
 
-    price_paths = np.zeros_like(daily_shocks)
+    # price_paths gets one extra row for the starting (day-0, today's known
+    # price) slot, so all `days_to_predict` generated shocks actually get
+    # applied to the path. Previously price_paths was sized
+    # (days_to_predict, simulations) with price_paths[0] = last_price
+    # consuming a slot without a shock, so the loop only ever applied
+    # days_to_predict - 1 of the days_to_predict shocks -- a "252-day"
+    # forecast only simulated 251 days of movement.
+    price_paths = np.zeros((days_to_predict + 1, simulations))
     price_paths[0] = last_price
 
-    for t in range(1, days_to_predict):
-        price_paths[t] = price_paths[t-1] * np.exp(daily_shocks[t])
+    for t in range(1, days_to_predict + 1):
+        price_paths[t] = price_paths[t - 1] * np.exp(daily_shocks[t - 1])
 
     final_prices = price_paths[-1]
     expected_price = np.mean(final_prices)
@@ -177,6 +231,10 @@ def run_time_machine(history_df, initial_capital=10000.0):
         divs = history_df['Dividends']
         dividends_per_share = float(divs[divs > 0].sum())
 
+    # Kept aside for the volatility calc near the bottom of this function --
+    # see the NOTE next to daily_returns there for why.
+    _original_prices = history_df['Close']
+
     history_df = _fill_market_holiday_gaps(history_df)
     prices = history_df['Close']
     volumes = history_df.get('Volume')
@@ -229,7 +287,16 @@ def run_time_machine(history_df, initial_capital=10000.0):
     # ---- 3. RISK METRICS over the selected window ----
     backtest = calculate_historical_backtest(history_df)
 
-    daily_returns = prices.pct_change().dropna()
+    # NOTE: volatility is computed from the ORIGINAL (non-gap-filled) close
+    # series (`_original_prices`), not `prices` (gap-filled) above. Every
+    # holiday _fill_market_holiday_gaps() forward-fills in is a synthetic
+    # exact-0% return day; folding those into pct_change()/.std() dilutes
+    # the true return variance and systematically understates this Safety
+    # score for every ticker. `prices` is still used above for the buy/sell
+    # trade simulation and for calculate_historical_backtest's CAGR/drawdown
+    # (unaffected by forward-filling, since those depend on price *levels*
+    # at specific dates, not day-to-day return *variance*).
+    daily_returns = _original_prices.pct_change().dropna()
     volatility_score = float(daily_returns.std() * np.sqrt(252) * 100) if len(daily_returns) > 1 else 0.0
 
     return {

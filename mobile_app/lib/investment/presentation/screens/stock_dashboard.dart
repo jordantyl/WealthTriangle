@@ -708,10 +708,16 @@ class _StockDashboardState extends State<StockDashboard> {
                             ),
                             IconButton(
                               icon: const Icon(Icons.check_circle, color: Colors.green),
-                              onPressed: () { 
-                                portfolio.confirmTrade(i); 
+                              onPressed: () async {
+                                final ticker = trade.ticker;
                                 Navigator.pop(ctx);
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Added ${trade.ticker}!")));
+                                final success = await portfolio.confirmTrade(i);
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                  content: Text(success
+                                      ? "Added $ticker!"
+                                      : "Couldn't add $ticker — please try again."),
+                                ));
                               },
                             ),
                           ],

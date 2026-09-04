@@ -4,6 +4,7 @@ import '../investment/application/portfolio_state.dart';
 import '../user/application/wealth_state.dart';
 import '../academy/application/academy_state.dart';
 import '../investment/data/stock_api.dart';
+import '../investment/domain/market_rules.dart';
 import '../shared/backend_headers.dart';
 
 /// Mutating tools (anything that writes to the user's portfolio or profile).
@@ -120,9 +121,9 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     try {
       final parsed = json.decode(_stripJsonFence(responseText));
       // A model that returns valid JSON with a blank/whitespace-only
-      // "message" (e.g. Ollama echoing an empty completion) would otherwise
-      // render as a silent, empty chat bubble — callers' `?? fallback` only
-      // catches a missing key, not an empty string.
+      // "message" would otherwise render as a silent, empty chat bubble —
+      // callers' `?? fallback` only catches a missing key, not an empty
+      // string.
       final message = parsed['message'];
       if (message is String && message.trim().isEmpty) {
         parsed['message'] = 'I understand. How can I help?';
@@ -142,15 +143,14 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
   static const Map<String, dynamic> _connectionErrorResult = {
     'action': 'chat',
     'message':
-        'I am having trouble connecting to my brain. Please make sure the backend server and Ollama are running.',
+        'I am having trouble connecting to my brain. Please check your internet connection and try again.',
     'confirmation_needed': false,
   };
 
   // Was previously identical to _connectionErrorResult — both a genuinely
   // unreachable backend AND a rejected/expired auth token showed the same
-  // "make sure the backend server and Ollama are running" message, which
-  // sent a debugger looking at the wrong layer (confirmed by a real QA
-  // session that hit this exact confusion).
+  // connection-error message, which sent a debugger looking at the wrong
+  // layer (confirmed by a real QA session that hit this exact confusion).
   static const Map<String, dynamic> _authErrorResult = {
     'action': 'chat',
     'message':
@@ -189,8 +189,8 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
   // lets the floating assistant's camera input (and, once wired in, the
   // in-app assistant's) act on what it sees (e.g. "record this holding from
   // the trade confirmation screenshot"), not just describe it. Gemini-only
-  // on the backend (/api/assistant/vision) — no Ollama/OpenAI fallback,
-  // since this needs real vision support.
+  // on the backend (/api/assistant/vision) — no OpenAI fallback, since this
+  // needs real vision support.
   Future<Map<String, dynamic>> processImageQuery(
     List<int> imageBytes, {
     String userCaption = '',
@@ -486,6 +486,29 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     }
   }
 
+  /// Runs the same MarketRules a manual trade goes through (AddTransactionScreen
+  /// -> MarketRules.validateQuantity/validateSell) against an AI-requested
+  /// quantity, before executing it — board-lot multiples, min trade qty, and
+  /// no-fractional-shares rules for tickers like `.KL`/`.HK`. Pure (no
+  /// Firebase/portfolio access), so it's directly unit-testable.
+  ///
+  /// Returns a chat-style error message (matching the "Couldn't ..." style
+  /// used elsewhere in this file) if the trade would be rejected, or null if
+  /// it's valid.
+  static String? validateTradeQuantity({
+    required String ticker,
+    required int qty,
+    required bool isSell,
+    int ownedQty = 0,
+  }) {
+    final rules = MarketRules.forTicker(ticker);
+    final error = isSell
+        ? rules.validateSell(qty.toString(), ownedQty)
+        : rules.validateQuantity(qty.toString());
+    if (error == null) return null;
+    return "Couldn't ${isSell ? 'sell' : 'record'} that holding — $error.";
+  }
+
   Future<String> _recordHolding(Map<String, dynamic> params) async {
     final ticker = (params['ticker'] ?? '').toString();
     final qty = _asInt(params['quantity']);
@@ -494,6 +517,8 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     if (ticker.isEmpty || qty <= 0 || price <= 0) {
       return "Couldn't record that holding — missing ticker, quantity, or price.";
     }
+    final validationError = validateTradeQuantity(ticker: ticker, qty: qty, isSell: false);
+    if (validationError != null) return validationError;
     await portfolioState.buyStock(ticker, qty, price, currency);
     return "Recorded $qty shares of $ticker at $currency ${price.toStringAsFixed(2)}.";
   }
@@ -505,6 +530,18 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     if (ticker.isEmpty || qty <= 0 || price <= 0) {
       return "Couldn't sell that holding — missing ticker, quantity, or price.";
     }
+    // Format-only checks (positive integer, fractional-share rules) run
+    // against MarketRules locally. The actual "do you own enough shares"
+    // check is deliberately NOT done against portfolioState.holdings here —
+    // that local cache is populated by a realtime Firestore listener that
+    // can lag a just-committed buy by a beat, which would wrongly reject a
+    // legitimate sell right after a buy in the same conversation. sellStock()
+    // below does that check authoritatively inside a Firestore transaction
+    // against the real document, so passing qty as ownedQty here just
+    // short-circuits the local (stale) ownership rule without skipping it.
+    final validationError =
+        validateTradeQuantity(ticker: ticker, qty: qty, isSell: true, ownedQty: qty);
+    if (validationError != null) return validationError;
     final error = await portfolioState.sellStock(ticker, qty, price);
     if (error != null) return error;
     return "Sold $qty shares of $ticker at ${price.toStringAsFixed(2)}.";

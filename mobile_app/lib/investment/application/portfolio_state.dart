@@ -303,9 +303,25 @@ class PortfolioState extends ChangeNotifier {
     super.dispose();
   }
 
+  // Stale-response guard for refreshPortfolioData() — see the field's doc
+  // comment below.
+  int _refreshSeq = 0;
+
   // ✅ FIXED: Concurrent fetching with Future.wait
+  //
+  // The holdings snapshot listener (_initRealtimeListeners) fires this
+  // un-awaited on every snapshot. Two snapshots arriving close together
+  // (e.g. a buy immediately followed by a sell) start two overlapping
+  // calls, and network timing gives no guarantee the one that started
+  // first also finishes first — so without a guard, a slower older call
+  // could resolve last and overwrite `_holdings` with stale data computed
+  // from an earlier snapshot (e.g. briefly reintroducing a just-sold
+  // ticker). `mySeq` captures this call's place in line; if a newer call
+  // has since started by the time this one is about to write its result,
+  // this one's result is discarded instead.
   Future<void> refreshPortfolioData() async {
     if (_holdings.isEmpty) return;
+    final mySeq = ++_refreshSeq;
 
     List<Future<PortfolioItem>> futures = _holdings.map((item) async {
       try {
@@ -336,6 +352,7 @@ class PortfolioState extends ChangeNotifier {
     }).toList();
 
     final updatedList = await Future.wait(futures);
+    if (mySeq != _refreshSeq) return; // a newer refresh has since started
     _holdings = updatedList;
     notifyListeners();
   }
@@ -450,11 +467,26 @@ class PortfolioState extends ChangeNotifier {
       }
     }
   }
-  void confirmTrade(int index) {
+  /// Executes a pending detected trade. Returns true and removes it from
+  /// [pendingTrades] only once buyStock's Firestore transaction has
+  /// actually committed; on failure the pending trade is left in place and
+  /// this returns false, so the caller (stock_dashboard.dart) can show a
+  /// real error instead of an unconditional "Added successfully" message.
+  Future<bool> confirmTrade(int index) async {
     final trade = _pendingTrades[index];
-    buyStock(trade.ticker, trade.qty, trade.price, "USD");
-    _pendingTrades.removeAt(index);
-    notifyListeners();
+    try {
+      await buyStock(trade.ticker, trade.qty, trade.price, "USD");
+      // Remove by identity, not the index captured before the await above —
+      // a concurrent confirmTrade/rejectTrade on another pending trade can
+      // shift list indices while this one's Firestore write is in flight,
+      // which made removeAt(index) here remove the wrong entry (or throw).
+      _pendingTrades.remove(trade);
+      notifyListeners();
+      return true;
+    } catch (e) {
+      print("Failed to confirm trade for ${trade.ticker}: $e");
+      return false;
+    }
   }
   void rejectTrade(int index) {
     _pendingTrades.removeAt(index);

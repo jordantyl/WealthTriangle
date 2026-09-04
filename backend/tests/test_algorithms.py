@@ -5,6 +5,8 @@ import pytest
 from algorithms import (
     calculate_historical_backtest,
     calculate_momentum_score,
+    calculate_rsi,
+    calculate_macd,
     run_monte_carlo,
     run_time_machine,
     _fill_market_holiday_gaps,
@@ -16,6 +18,54 @@ def make_close_df(prices, volumes=None):
     if volumes is not None:
         data["Volume"] = volumes
     return pd.DataFrame(data)
+
+
+class TestCalculateRsi:
+    def test_monotonically_rising_series_approaches_100(self):
+        series = pd.Series(np.linspace(100, 200, 60))
+        result = calculate_rsi(series)
+        assert result.iloc[-1] > 95
+
+    def test_monotonically_falling_series_approaches_0(self):
+        series = pd.Series(np.linspace(200, 100, 60))
+        result = calculate_rsi(series)
+        assert result.iloc[-1] < 5
+
+    def test_flat_series_is_neutral_50(self):
+        series = pd.Series([100.0] * 30)
+        result = calculate_rsi(series)
+        assert result.iloc[-1] == pytest.approx(50.0)
+
+    def test_first_period_rows_default_to_neutral_before_the_rolling_window_fills(self):
+        series = pd.Series(np.linspace(100, 120, 20))
+        result = calculate_rsi(series, period=14)
+        assert result.iloc[0] == 50.0
+
+
+class TestCalculateMacd:
+    def test_returns_macd_signal_and_histogram_keys(self):
+        series = pd.Series(np.linspace(100, 150, 60))
+        result = calculate_macd(series)
+        assert set(result.keys()) == {"macd", "signal", "histogram"}
+
+    def test_histogram_is_positive_on_a_sustained_uptrend(self):
+        series = pd.Series(np.linspace(100, 200, 60))
+        result = calculate_macd(series)
+        assert result["histogram"] > 0
+
+    def test_histogram_is_negative_on_a_sustained_downtrend(self):
+        series = pd.Series(np.linspace(200, 100, 60))
+        result = calculate_macd(series)
+        assert result["histogram"] < 0
+
+    def test_histogram_sign_flips_at_a_trend_reversal(self):
+        # Rises for 40 points then reverses and falls for 40 -> the MACD
+        # histogram should have flipped from positive to negative by the end.
+        rising = np.linspace(100, 200, 40)
+        falling = np.linspace(200, 100, 40)
+        series = pd.Series(np.concatenate([rising, falling]))
+        result = calculate_macd(series)
+        assert result["histogram"] < 0
 
 
 class TestCalculateHistoricalBacktest:
@@ -130,6 +180,84 @@ class TestRunMonteCarlo:
 
         result = run_monte_carlo("TEST", df, years=1, simulations=100, momentum_score=5.0)
         assert result["momentum_score"] == pytest.approx(1.0)
+
+    def test_all_generated_daily_shocks_are_applied_to_the_price_path(self, monkeypatch):
+        # daily_shocks has shape (days_to_predict, simulations); previously
+        # the simulation loop started at price_paths[0] = last_price (using
+        # up a slot without ever applying a shock) and only ever applied
+        # daily_shocks[1:], so a "252-day" forecast only simulated 251 days
+        # of movement -- daily_shocks[0] was generated and silently
+        # discarded. Pin np.random.normal to a known, non-random array and
+        # hand-compute the expected end price from ALL of it to confirm
+        # every generated shock is now actually consumed.
+        prices = 100 * np.cumprod(1 + np.random.default_rng(5).normal(0.0005, 0.01, 300))
+        df = make_close_df(prices)
+
+        simulations = 1
+        days_to_predict = 252  # years=1
+        fixed_shocks = np.linspace(0.0005, 0.002, days_to_predict * simulations).reshape(
+            days_to_predict, simulations
+        )
+
+        def fake_normal(loc, scale, size):
+            assert size == (days_to_predict, simulations)
+            return fixed_shocks
+
+        monkeypatch.setattr(np.random, "normal", fake_normal)
+
+        result = run_monte_carlo("TEST", df, years=1, simulations=simulations)
+
+        last_price = float(df["Close"].iloc[-1])
+        expected_final = last_price * np.exp(fixed_shocks.sum())
+        assert result["expected_price_1y"] == pytest.approx(round(float(expected_final), 2), rel=1e-9)
+
+
+class TestVolatilityNotDilutedByHolidayGaps:
+    """_fill_market_holiday_gaps() forward-fills every reindexed holiday gap
+    with the previous close -- an exact 0% "return" day. Feeding that
+    filled series into pct_change()/.std() for volatility (rather than just
+    for continuous-index needs like simulation stepping) dilutes the true
+    return variance and systematically understates the risk/Safety score
+    for every ticker with any gap in its date range, not just an edge case.
+    These confirm risk_score_volatility now matches the volatility of the
+    series with the holiday gap simply absent (i.e. as if it were "manually
+    removed"), rather than a synthetic zero-return day suppressing it."""
+
+    @staticmethod
+    def _gapped_df(seed, volumes=False):
+        dates = pd.bdate_range("2024-01-02", periods=40)
+        dates = dates.delete(20)  # simulate one skipped holiday weekday
+        rng = np.random.default_rng(seed)
+        prices = 100 * np.cumprod(1 + rng.normal(0.0, 0.02, len(dates)))
+        data = {"Close": prices}
+        if volumes:
+            data["Volume"] = [1_000_000] * len(dates)
+        return pd.DataFrame(data, index=dates)
+
+    def test_monte_carlo_risk_score_matches_ungapped_volatility(self):
+        df = self._gapped_df(seed=3)
+
+        # The "gap manually removed" baseline: pct_change()/.std() computed
+        # directly on this series exactly as run_monte_carlo's log-return
+        # stdev does, without ever reindexing/forward-filling the missing
+        # weekday.
+        expected_returns = df["Close"].pct_change().dropna()
+        expected_log_returns = np.log(1 + expected_returns)
+        expected_risk_score = round(float(expected_log_returns.std() * np.sqrt(252) * 100), 2)
+
+        result = run_monte_carlo("TEST", df, years=1, simulations=50)
+
+        assert result["risk_score_volatility"] == pytest.approx(expected_risk_score, abs=0.01)
+
+    def test_time_machine_risk_score_matches_ungapped_volatility(self):
+        df = self._gapped_df(seed=4, volumes=True)
+
+        expected_returns = df["Close"].pct_change().dropna()
+        expected_risk_score = round(float(expected_returns.std() * np.sqrt(252) * 100), 2)
+
+        result = run_time_machine(df, initial_capital=10_000.0)
+
+        assert result["risk_score_volatility"] == pytest.approx(expected_risk_score, abs=0.01)
 
 
 class TestCalculateMomentumScore:

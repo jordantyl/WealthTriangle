@@ -24,7 +24,9 @@ against what's actually in Play Console the day you submit.
 | App info and performance > Diagnostics | Yes (backend only, if `SENTRY_DSN` set) | No (Sentry as processor) | Analytics | PII scrubbing enabled server-side |
 | Device or other IDs | Yes | No | App functionality | Firebase installation ID |
 | Location | No | — | — | Not collected |
-| Photos/videos, Audio, Files/docs, Contacts, Calendar, Messages, Health & fitness, Web browsing | No | — | — | Not collected |
+| Photos/videos > Photos | Yes | Yes — Google Gemini (OCR/vision) | App functionality | Camera/gallery images for receipt-OCR transaction entry and the floating assistant's vision input; sent to the backend, then to Gemini for processing. Not stored server-side beyond the request. |
+| Audio > Voice or sound recordings | Yes | No | App functionality | Microphone input for the floating assistant's voice queries, transcribed on-device (`speech_to_text`) before the text prompt is sent to the backend — raw audio itself is not transmitted |
+| Files/docs, Contacts, Calendar, Messages, Health & fitness, Web browsing | No | — | — | Not collected |
 
 ## Is all of the user data collected by your app encrypted in transit?
 **Yes** — all traffic to Firebase and to the Flask backend goes over

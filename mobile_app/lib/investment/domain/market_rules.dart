@@ -28,7 +28,7 @@ class MarketRules {
     // 🇭🇰 HONG KONG (.HK) -> Semi-Strict
     if (t.endsWith(".HK")) {
       return MarketRules(
-        minTradeQty: 200, // Example from your request
+        minTradeQty: 200,
         boardLotSize: 200, 
         fractionalAllowed: false,
         oddLotAllowed: true

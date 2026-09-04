@@ -1,9 +1,8 @@
 rules_version = '2';
 
-// Draft rules based on every Firestore read/write path found in the Flutter
-// client during this review. NOT deployed automatically — review and deploy
-// yourself (Firebase Console > Firestore > Rules, or `firebase deploy
-// --only firestore:rules` if this project has the Firebase CLI set up).
+// Firestore security rules covering every read/write path used by the
+// Flutter client. Deployed via Firebase Console > Firestore > Rules
+// (or `firebase deploy --only firestore:rules`).
 service cloud.firestore {
   match /databases/{database}/documents {
 

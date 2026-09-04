@@ -1,3 +1,6 @@
+import math
+
+import pandas as pd
 import pytest
 
 import app as app_module
@@ -256,25 +259,15 @@ class TestAssistantFallback:
         r = client.post("/api/assistant", json={})
         assert r.status_code == 400
 
-    def test_falls_back_to_gemini_when_ollama_unreachable(self, client, monkeypatch):
+    def test_uses_gemini_when_configured(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "GEMINI_API_KEY", "fake-gemini")
-
-        def broken_ollama(prompt):
-            raise ConnectionError("no ollama running")
-
-        monkeypatch.setattr(app_module, "_try_ollama", broken_ollama)
         monkeypatch.setattr(app_module, "_try_gemini", lambda prompt: "gemini says hi")
 
         r = client.post("/api/assistant", json={"prompt": "hello"})
         assert r.status_code == 200
         assert r.get_json()["response"] == "gemini says hi"
 
-    def test_no_backend_configured_gives_actionable_error(self, client, monkeypatch):
-        def broken_ollama(prompt):
-            raise ConnectionError("no ollama running")
-
-        monkeypatch.setattr(app_module, "_try_ollama", broken_ollama)
-
+    def test_no_backend_configured_gives_actionable_error(self, client):
         r = client.post("/api/assistant", json={"prompt": "hello"})
         assert r.status_code == 502
         assert "GEMINI_API_KEY" in r.get_json()["error"]
@@ -427,7 +420,6 @@ class TestFirebaseAuthGate:
             return {"uid": "user-123"}
 
         monkeypatch.setattr(app_module.admin_auth, "verify_id_token", fake_verify)
-        monkeypatch.setattr(app_module, "_try_ollama", lambda p: (_ for _ in ()).throw(ConnectionError()))
         monkeypatch.setattr(app_module, "_try_gemini", lambda p: "hi there")
 
         r = client.post(
@@ -550,7 +542,7 @@ class TestAdminSeed:
                 return FakeCollectionRef(name)
 
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdmin())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
 
         payload = {
@@ -569,7 +561,7 @@ class TestAdminSeed:
     def test_rejects_empty_collections_payload(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", object())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
         r = client.post(
             "/api/admin/seed", json={"collections": {}},
@@ -592,7 +584,7 @@ class TestAdminSeed:
         # signed-in user passed.
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "random-user-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.post(
             "/api/admin/seed", json={"collections": {"academy_scenarios": {"a": {}}}},
@@ -606,7 +598,7 @@ class TestAdminSeed:
         # silently treating everyone as an admin.
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", set())
         r = client.post(
             "/api/admin/seed", json={"collections": {"academy_scenarios": {"a": {}}}},
@@ -637,7 +629,7 @@ class TestAdminStatus:
 
     def test_false_for_a_valid_but_non_admin_user(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "random-user-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.get("/api/admin/status")
         assert r.status_code == 200
@@ -645,7 +637,7 @@ class TestAdminStatus:
 
     def test_false_when_admin_uids_not_configured(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", set())
         r = client.get("/api/admin/status")
         assert r.status_code == 200
@@ -653,7 +645,7 @@ class TestAdminStatus:
 
     def test_true_for_an_actual_admin(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "test-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
         r = client.get("/api/admin/status")
         assert r.status_code == 200
@@ -666,7 +658,7 @@ class TestAdminStatus:
             app_module, "_firestore_admin",
             FakeFirestoreAdminUsers({"promoted-uid": {"role": "admin"}}),
         )
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "promoted-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "promoted-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.get("/api/admin/status")
         assert r.status_code == 200
@@ -682,7 +674,7 @@ class TestAdminPromoteDemote:
     def test_promote_requires_admin_caller(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         monkeypatch.setattr(app_module, "_firestore_admin", FakeFirestoreAdminUsers())
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "random-user-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.post(
             "/api/admin/users/some-target-uid/promote",
@@ -694,7 +686,7 @@ class TestAdminPromoteDemote:
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers()
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "admin-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
         r = client.post(
             "/api/admin/users/target-uid/promote",
@@ -711,7 +703,7 @@ class TestAdminPromoteDemote:
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers()
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "admin-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
         r = client.post("/api/admin/users/target-uid/promote")
         assert r.status_code == 401
@@ -723,7 +715,7 @@ class TestAdminPromoteDemote:
             app_module, "_firestore_admin",
             FakeFirestoreAdminUsers({"target-uid": {"role": "admin"}}),
         )
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "random-user-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "random-user-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"the-actual-admin-uid"})
         r = client.post(
             "/api/admin/users/target-uid/demote",
@@ -735,7 +727,7 @@ class TestAdminPromoteDemote:
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers({"target-uid": {"role": "admin"}})
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "admin-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
         r = client.post(
             "/api/admin/users/target-uid/demote",
@@ -748,7 +740,7 @@ class TestAdminPromoteDemote:
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers({"admin-uid": {"role": "admin"}})
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "admin-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
         r = client.post(
             "/api/admin/users/admin-uid/demote",
@@ -764,10 +756,279 @@ class TestAdminPromoteDemote:
         monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
         fake = FakeFirestoreAdminUsers()
         monkeypatch.setattr(app_module, "_firestore_admin", fake)
-        monkeypatch.setattr(app_module, "_verified_uid_or_none", lambda: "admin-uid")
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "admin-uid"})
         monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid", "other-env-admin"})
         r = client.post(
             "/api/admin/users/other-env-admin/demote",
             headers={"X-API-Key": "secret123"},
         )
         assert r.status_code == 400
+
+
+class TestBacktestCapitalValidation:
+    """float() happily parses "inf"/"Infinity"/"-inf"/"nan" without raising,
+    and none of those fail a plain `capital <= 0` check (inf > 0 is True;
+    nan compares False both ways) -- letting one through would put a
+    non-finite number into the JSON response, which isn't valid JSON and
+    breaks the Flutter client's json.decode()."""
+
+    def test_rejects_positive_infinite_capital(self, client):
+        r = client.get(
+            "/api/backtest?ticker=AAPL&start=2020-01-01&end=2023-01-01&capital=inf"
+        )
+        assert r.status_code == 400
+        assert "capital" in r.get_json()["error"]
+
+    def test_rejects_negative_infinite_capital(self, client):
+        r = client.get(
+            "/api/backtest?ticker=AAPL&start=2020-01-01&end=2023-01-01&capital=-inf"
+        )
+        assert r.status_code == 400
+
+    def test_rejects_nan_capital(self, client):
+        r = client.get(
+            "/api/backtest?ticker=AAPL&start=2020-01-01&end=2023-01-01&capital=nan"
+        )
+        assert r.status_code == 400
+
+    def test_rejects_infinity_spelled_out(self, client):
+        r = client.get(
+            "/api/backtest?ticker=AAPL&start=2020-01-01&end=2023-01-01&capital=Infinity"
+        )
+        assert r.status_code == 400
+
+    def test_still_accepts_a_normal_capital_value(self, client, monkeypatch):
+        # Guards against the finiteness check accidentally rejecting valid
+        # input -- everything past validation just needs to not 400/crash;
+        # the actual backtest call is exercised elsewhere (yfinance itself
+        # isn't mocked here, so this may 404/500 depending on network
+        # availability -- either is fine as long as it isn't the 400 the
+        # capital validation itself would produce).
+        r = client.get(
+            "/api/backtest?ticker=AAPL&start=2020-01-01&end=2023-01-01&capital=5000"
+        )
+        assert r.status_code != 400
+
+
+class _FakeStockTicker:
+    """Minimal stand-in for yfinance.Ticker, covering exactly what
+    get_stock_data() touches: .history() and .info."""
+
+    def __init__(self, history_df, info=None):
+        self._history_df = history_df
+        self.info = info or {}
+
+    def history(self, period=None, start=None, end=None):
+        return self._history_df
+
+
+class TestGetStockDataNanGuard:
+    """Mirrors run_monte_carlo's existing NaN guard (algorithms.py) at the
+    /api/stock route: a partial/halted-ticker latest bar can carry a NaN
+    Close, which must not reach jsonify() -- Flask serializes NaN as a bare
+    `NaN` token, which is not valid JSON and breaks the Flutter client's
+    json.decode()."""
+
+    def test_nan_latest_close_falls_back_to_last_valid_price(self, client, monkeypatch):
+        dates = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+        df = pd.DataFrame({"Close": [100.0, 105.0, float("nan")]}, index=dates)
+        monkeypatch.setattr(app_module.yf, "Ticker", lambda ticker: _FakeStockTicker(df))
+
+        r = client.get("/api/stock?ticker=TEST")
+
+        assert r.status_code == 200
+        body = r.get_json()
+        assert math.isfinite(body["current_price"])
+        assert body["current_price"] == pytest.approx(105.0)
+        assert math.isfinite(body["ma50"])
+
+    def test_all_nan_close_returns_a_clean_error_instead_of_crashing(self, client, monkeypatch):
+        dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
+        df = pd.DataFrame({"Close": [float("nan"), float("nan")]}, index=dates)
+        monkeypatch.setattr(app_module.yf, "Ticker", lambda ticker: _FakeStockTicker(df))
+
+        r = client.get("/api/stock?ticker=TEST")
+
+        assert r.status_code == 502
+        assert "error" in r.get_json()
+
+
+class TestAdminGetEndpointsRequireFirebaseAdmin:
+    """The six admin GET routes previously crashed with a raw 500 HTML page
+    (unhandled AttributeError on `_firestore_admin.collection(...)`/
+    `admin_auth.list_users()`) when Firebase Admin isn't configured, since
+    _require_admin_user() intentionally lets requests through in that case
+    (see its own comment) but nothing downstream guarded against
+    _firestore_admin actually being None. These must now fail with a clean
+    503 JSON response instead, matching _require_admin_write()'s existing
+    503 for the same precondition."""
+
+    def test_admin_users(self, client):
+        r = client.get("/api/admin/users")
+        assert r.status_code == 503
+        assert r.get_json()["error"]
+
+    def test_admin_user_detail(self, client):
+        r = client.get("/api/admin/users/some-uid/detail")
+        assert r.status_code == 503
+        assert r.get_json()["error"]
+
+    def test_admin_content_counts(self, client):
+        r = client.get("/api/admin/content_counts")
+        assert r.status_code == 503
+        assert r.get_json()["error"]
+
+    def test_admin_list_content(self, client):
+        r = client.get("/api/admin/content/academy_scenarios")
+        assert r.status_code == 503
+        assert r.get_json()["error"]
+
+    def test_admin_audit_log(self, client):
+        r = client.get("/api/admin/audit_log")
+        assert r.status_code == 503
+        assert r.get_json()["error"]
+
+    def test_admin_stats(self, client):
+        r = client.get("/api/admin/stats")
+        assert r.status_code == 503
+        assert r.get_json()["error"]
+
+
+class _RaisingFirestoreAdmin:
+    """Stands in for a Firestore Admin client whose calls blow up -- used to
+    confirm the four admin write routes return a clean 500 JSON response
+    instead of letting the exception propagate as a raw 500 HTML page (with
+    app.testing = True, an *unhandled* exception raises straight through the
+    test client instead of becoming a response at all, so these tests fail
+    loudly if the try/except is ever removed)."""
+
+    def batch(self):
+        raise RuntimeError("firestore is down")
+
+    def collection(self, name):
+        raise RuntimeError("firestore is down")
+
+
+class TestAdminWriteRoutesHandleFirestoreErrors:
+    def test_admin_seed_returns_500_json_on_firestore_error(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", _RaisingFirestoreAdmin())
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
+
+        r = client.post(
+            "/api/admin/seed",
+            json={"collections": {"academy_scenarios": {"a": {}}}},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 500
+        assert "error" in r.get_json()
+
+    def test_admin_create_content_returns_500_json_on_firestore_error(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", _RaisingFirestoreAdmin())
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
+
+        r = client.post(
+            "/api/admin/content/academy_scenarios",
+            json={"title": "A"},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 500
+        assert "error" in r.get_json()
+
+    def test_admin_update_content_returns_500_json_on_firestore_error(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", _RaisingFirestoreAdmin())
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
+
+        r = client.put(
+            "/api/admin/content/academy_scenarios/doc1",
+            json={"title": "A"},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 500
+        assert "error" in r.get_json()
+
+    def test_admin_delete_content_returns_500_json_on_firestore_error(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        monkeypatch.setattr(app_module, "_firestore_admin", _RaisingFirestoreAdmin())
+        monkeypatch.setattr(app_module, "_verified_claims_or_none", lambda: {"uid": "test-uid"})
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"test-uid"})
+
+        r = client.delete(
+            "/api/admin/content/academy_scenarios/doc1",
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 500
+        assert "error" in r.get_json()
+
+
+class TestAdminWriteReusesVerifiedClaims:
+    """Fix for the redundant double Firebase token verification:
+    _require_admin_write() now hands back the claims it already verified,
+    instead of admin_demote_user()/_log_admin_action() calling
+    _verified_claims_or_none() a second time. These confirm the refactor
+    still produces correct behaviour (self-demote/env-admin guards, audit
+    log actor fields) using only the single verification call."""
+
+    def test_demote_still_uses_the_verified_caller_uid(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+        fake = FakeFirestoreAdminUsers({"admin-uid": {"role": "admin"}})
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(
+            app_module, "_verified_claims_or_none",
+            lambda: {"uid": "admin-uid", "email": "admin@example.com"},
+        )
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
+
+        # Demoting yourself must still be blocked using the uid obtained
+        # from _require_admin_write()'s claims, not a fresh verify call.
+        r = client.post(
+            "/api/admin/users/admin-uid/demote",
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 400
+
+    def test_create_content_audit_log_uses_the_verified_claims(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "BACKEND_API_KEY", "secret123")
+
+        logged = {}
+
+        class FakeAuditFirestore(FakeFirestoreAdminUsers):
+            def collection(self, name):
+                if name == "admin_audit_log":
+                    class _FakeAuditCollection:
+                        def add(self, data):
+                            logged.update(data)
+                    return _FakeAuditCollection()
+                if name == "academy_scenarios":
+                    class _FakeDocRef:
+                        id = "new-doc-id"
+
+                        def set(self, data):
+                            pass
+                    class _FakeContentCollection:
+                        def document(self):
+                            return _FakeDocRef()
+                    return _FakeContentCollection()
+                return super().collection(name)
+
+        fake = FakeAuditFirestore()
+        monkeypatch.setattr(app_module, "_firestore_admin", fake)
+        monkeypatch.setattr(
+            app_module, "_verified_claims_or_none",
+            lambda: {"uid": "admin-uid", "email": "admin@example.com"},
+        )
+        monkeypatch.setattr(app_module, "ADMIN_UIDS", {"admin-uid"})
+
+        r = client.post(
+            "/api/admin/content/academy_scenarios",
+            json={"title": "A"},
+            headers={"X-API-Key": "secret123"},
+        )
+        assert r.status_code == 200
+        assert logged["actorUid"] == "admin-uid"
+        assert logged["actorEmail"] == "admin@example.com"

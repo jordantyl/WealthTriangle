@@ -1,11 +1,12 @@
 import sys
 import os
 import json
+import math
 import time
 import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import requests
-import numpy as np
 import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
@@ -21,6 +22,8 @@ from algorithms import (
     run_time_machine,
     calculate_momentum_score,
     extract_price_series,
+    calculate_rsi,
+    calculate_macd,
 )
 
 # Loads backend/.env into the process environment if the file exists (local
@@ -234,23 +237,35 @@ def _is_admin(uid):
     return doc.exists and doc.to_dict().get('role') == 'admin'
 
 
+def _require_admin_user_with_claims():
+    """Like _require_admin_user() below, but also hands back the verified
+    Firebase token claims (uid/email/...) on success, so a caller that needs
+    them (e.g. _require_admin_write()) can reuse them instead of calling
+    verify_id_token() a second time for the same request.
+    Returns (None, claims) if OK to proceed, else (error_tuple, None)."""
+    if _firestore_admin is None:
+        return None, None  # Firebase Admin not configured — skip (matches dev fallback above)
+    claims = _verified_claims_or_none()
+    uid = claims.get("uid") if claims else None
+    if uid is None:
+        return (jsonify({"error": "Unauthorized: valid Firebase sign-in required"}), 401), None
+    if not ADMIN_UIDS and not _firestore_admin_uids():
+        return (jsonify({
+            "error": "Server misconfigured: set ADMIN_UIDS to at least one "
+                     "Firebase UID before this endpoint can be used."
+        }), 503), None
+    if not _is_admin(uid):
+        return (jsonify({"error": "Forbidden: admin access required"}), 403), None
+    return None, claims
+
+
 def _require_admin_user():
     """Returns None if OK to proceed, else a (response, status) error tuple.
     Stricter than _require_firebase_user(): the caller must also pass
-    _is_admin(), not merely be a valid signed-in account."""
-    if _firestore_admin is None:
-        return None  # Firebase Admin not configured — skip (matches dev fallback above)
-    uid = _verified_uid_or_none()
-    if uid is None:
-        return jsonify({"error": "Unauthorized: valid Firebase sign-in required"}), 401
-    if not ADMIN_UIDS and not _firestore_admin_uids():
-        return jsonify({
-            "error": "Server misconfigured: set ADMIN_UIDS to at least one "
-                     "Firebase UID before this endpoint can be used."
-        }), 503
-    if not _is_admin(uid):
-        return jsonify({"error": "Forbidden: admin access required"}), 403
-    return None
+    _is_admin(), not merely be a valid signed-in account. Thin wrapper
+    around _require_admin_user_with_claims() for the many callers that only
+    need the pass/fail result."""
+    return _require_admin_user_with_claims()[0]
 
 # =====================================================================
 # 🔐 SECRET KEYS LIVE ON THE SERVER ONLY.
@@ -298,28 +313,6 @@ def _require_api_key():
     return None
 
 
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50.0)
-
-
-def calculate_macd(series, fast=12, slow=26, signal=9):
-    exp1 = series.ewm(span=fast, adjust=False).mean()
-    exp2 = series.ewm(span=slow, adjust=False).mean()
-    macd_line = exp1 - exp2
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return {
-        "macd": round(macd_line.iloc[-1], 2),
-        "signal": round(signal_line.iloc[-1], 2),
-        "histogram": round(histogram.iloc[-1], 2)
-    }
-
-
 @app.route('/')
 def index():
     return "Backend is running"
@@ -344,8 +337,14 @@ def time_machine_backtest():
 
     if not ticker or not start or not end:
         return jsonify({"error": "ticker, start and end are required"}), 400
-    if capital <= 0:
-        return jsonify({"error": "capital must be greater than 0"}), 400
+    # float() happily parses "inf"/"Infinity"/"-inf"/"nan" without raising,
+    # and none of those fail the plain `<= 0` check below (inf > 0 is True;
+    # nan compares False both ways) -- letting one through would put a
+    # non-finite number into run_time_machine's output, which jsonify()
+    # serializes as a bare `NaN`/`Infinity` token: not valid JSON, and it
+    # breaks the Flutter client's json.decode().
+    if not math.isfinite(capital) or capital <= 0:
+        return jsonify({"error": "capital must be a finite number greater than 0"}), 400
 
     try:
         stock = yf.Ticker(ticker)
@@ -402,7 +401,13 @@ def time_machine_backtest():
 #    ticker instead of the sum of all of them.
 # =====================================================================
 NEWS_CACHE_TTL_SECONDS = 300
-_news_cache = {}  # ticker -> (fetched_at_monotonic, [raw article dicts])
+# Bounded eviction -- without a cap, a long-running process accumulates one
+# entry per distinct ticker ever requested (watchlists/search/holdings all
+# funnel through here) and never frees any of them, growing unboundedly over
+# the process lifetime. 200 tickers comfortably covers any single user's
+# real working set (watchlist + holdings + search) with room to spare.
+NEWS_CACHE_MAX_TICKERS = 200
+_news_cache = OrderedDict()  # ticker -> (fetched_at_monotonic, [raw article dicts]); ordered so eviction can drop the least-recently-used entry
 _news_cache_lock = threading.Lock()
 
 
@@ -413,6 +418,8 @@ def _fetch_ticker_news_raw(ticker):
     now = time.monotonic()
     with _news_cache_lock:
         cached = _news_cache.get(ticker)
+        if cached is not None:
+            _news_cache.move_to_end(ticker)  # mark as most-recently-used
     if cached and (now - cached[0]) < NEWS_CACHE_TTL_SECONDS:
         return cached[1]
 
@@ -447,6 +454,9 @@ def _fetch_ticker_news_raw(ticker):
 
     with _news_cache_lock:
         _news_cache[ticker] = (now, result)
+        _news_cache.move_to_end(ticker)
+        while len(_news_cache) > NEWS_CACHE_MAX_TICKERS:
+            _news_cache.popitem(last=False)  # evict the least-recently-used ticker
     return result
 
 
@@ -759,28 +769,10 @@ def classify_news_proxy():
 
 
 # =====================================================================
-# AI ASSISTANT PROXY — phone -> Flask -> Ollama (if running locally),
-# falling back to OpenAI (reusing OPENAI_API_KEY, same as /api/summarize)
-# if Ollama isn't reachable. Previously this only tried Ollama, so the
-# assistant was permanently broken on any machine without it installed.
-# To use Ollama: run `ollama serve` on this machine (free, local, private).
-# Otherwise it'll use OpenAI automatically as long as OPENAI_API_KEY is set.
+# AI ASSISTANT PROXY — phone -> Flask -> Gemini, falling back to OpenAI
+# (reusing OPENAI_API_KEY, same as /api/summarize) if Gemini fails.
 # POST /api/assistant   body: {"prompt": "..."}
 # =====================================================================
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
-
-
-def _try_ollama(prompt):
-    r = requests.post(
-        OLLAMA_URL,
-        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-        timeout=5,
-    )
-    r.raise_for_status()
-    return r.json().get("response", "")
-
-
 def _try_openai_assistant(prompt):
     r = requests.post(
         "https://api.openai.com/v1/chat/completions",
@@ -825,9 +817,9 @@ def _try_gemini(prompt, model="gemini-flash-latest"):
 def _try_gemini_vision(prompt, image_base64, mime_type, model="gemini-flash-latest"):
     # Same endpoint/model as _try_gemini, but with an inline_data image part
     # alongside the text part — this is Gemini's multimodal input shape.
-    # Ollama (llama3.2, text-only) and the gpt-3.5-turbo fallback can't do
-    # vision, so the floating assistant's camera input only ever goes
-    # through Gemini; there's no fallback chain here like /api/assistant.
+    # The gpt-3.5-turbo fallback can't do vision, so the floating assistant's
+    # camera input only ever goes through Gemini; there's no fallback chain
+    # here like /api/assistant.
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         # See _try_gemini() above for why the key is a header, not a query param.
@@ -844,8 +836,8 @@ def _try_gemini_vision(prompt, image_base64, mime_type, model="gemini-flash-late
 
 # =====================================================================
 # FLOATING ASSISTANT VISION PROXY — phone (overlay) -> Flask -> Gemini.
-# Same auth/rate-limit posture as /api/assistant. Gemini-only (no Ollama/
-# OpenAI fallback) since this needs real vision support.
+# Same auth/rate-limit posture as /api/assistant. Gemini-only (no OpenAI
+# fallback) since this needs real vision support.
 # POST /api/assistant/vision   body: {"prompt": "...", "image_base64": "...", "mime_type": "image/jpeg"}
 # =====================================================================
 @app.route('/api/assistant/vision', methods=['POST'])
@@ -889,12 +881,6 @@ def assistant_proxy():
     if not prompt:
         return jsonify({"error": "prompt required"}), 400
 
-    # Try Ollama first (short timeout — fails fast if it's just not running).
-    try:
-        return jsonify({"response": _try_ollama(prompt)})
-    except Exception:
-        pass
-
     if GEMINI_API_KEY:
         try:
             return jsonify({"response": _try_gemini(prompt)})
@@ -914,9 +900,8 @@ def assistant_proxy():
             }), 502
 
     return jsonify({
-        "error": "AI assistant isn't configured. Either run `ollama serve` on "
-                  "this machine, or set GEMINI_API_KEY / OPENAI_API_KEY in the "
-                  "backend environment."
+        "error": "AI assistant isn't configured. Set GEMINI_API_KEY or "
+                  "OPENAI_API_KEY in the backend environment."
     }), 502
 
 
@@ -932,6 +917,12 @@ def assistant_proxy():
 # =====================================================================
 _INDEX_CACHE = {"sp500": None, "klci": None, "fetched_at": 0.0}
 _INDEX_CACHE_TTL_SECONDS = 24 * 60 * 60
+# Guards _INDEX_CACHE's read-check-write sequence below, same pattern as
+# _news_cache_lock above -- without it, two concurrent /api/search requests
+# racing past a stale/empty cache can both decide a refresh is needed and
+# both scrape Wikipedia at once instead of one of them reusing the other's
+# result.
+_index_cache_lock = threading.Lock()
 
 
 def _fetch_sp500_tickers():
@@ -983,17 +974,20 @@ def _get_index_constituents():
     refresh attempt fails, so a transient Wikipedia/network hiccup doesn't
     make search return nothing."""
     now = time.time()
-    if _INDEX_CACHE["sp500"] and now - _INDEX_CACHE["fetched_at"] < _INDEX_CACHE_TTL_SECONDS:
-        return _INDEX_CACHE["sp500"], _INDEX_CACHE["klci"]
+    with _index_cache_lock:
+        if _INDEX_CACHE["sp500"] and now - _INDEX_CACHE["fetched_at"] < _INDEX_CACHE_TTL_SECONDS:
+            return _INDEX_CACHE["sp500"], _INDEX_CACHE["klci"]
     try:
         sp500 = _fetch_sp500_tickers()
         klci = _fetch_klci_tickers()
         if sp500 and klci:
-            _INDEX_CACHE.update({"sp500": sp500, "klci": klci, "fetched_at": now})
+            with _index_cache_lock:
+                _INDEX_CACHE.update({"sp500": sp500, "klci": klci, "fetched_at": now})
             return sp500, klci
     except Exception as e:
         print(f"Index constituent fetch failed: {e}")
-    return _INDEX_CACHE["sp500"] or set(), _INDEX_CACHE["klci"] or set()
+    with _index_cache_lock:
+        return _INDEX_CACHE["sp500"] or set(), _INDEX_CACHE["klci"] or set()
 
 
 @app.route('/api/search', methods=['GET'])
@@ -1222,6 +1216,17 @@ def get_stock_data():
         if df.empty:
             return jsonify({"error": "No data"}), 404
 
+        # A partial/halted-ticker latest bar can carry a NaN Close. Drop any
+        # NaN Close rows up front so current_price/ma50/RSI/MACD below are
+        # computed from the last genuinely valid data instead of letting NaN
+        # reach jsonify() -- Flask serializes NaN as a bare `NaN` token,
+        # which is not valid JSON and breaks the Flutter client's
+        # json.decode() (the same class of bug run_monte_carlo already
+        # guards against for its own too-little-data case).
+        df = df[df['Close'].notna()]
+        if df.empty:
+            return jsonify({"error": "No valid price data for this ticker."}), 502
+
         current_price = df['Close'].iloc[-1]
 
         change_percent = 0.0
@@ -1372,15 +1377,19 @@ def admin_seed():
     if not collections:
         return jsonify({"error": "collections required"}), 400
 
-    seeded = 0
-    for coll_name, docs in collections.items():
-        batch = _firestore_admin.batch()
-        for doc_id, data in docs.items():
-            batch.set(_firestore_admin.collection(coll_name).document(doc_id), data)
-        batch.commit()
-        seeded += 1
+    try:
+        seeded = 0
+        for coll_name, docs in collections.items():
+            batch = _firestore_admin.batch()
+            for doc_id, data in docs.items():
+                batch.set(_firestore_admin.collection(coll_name).document(doc_id), data)
+            batch.commit()
+            seeded += 1
 
-    return jsonify({"seeded_collections": seeded})
+        return jsonify({"seeded_collections": seeded})
+    except Exception as e:
+        print(f"Admin Seed Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # =====================================================================
@@ -1410,6 +1419,11 @@ def admin_users():
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
     firestore_admin_uids = _firestore_admin_uids()
     users = []
     for user in admin_auth.list_users().iterate_all():
@@ -1444,7 +1458,7 @@ def admin_promote_user(uid):
     # admin access has at least the same defense-in-depth as editing quiz
     # content — a hard BACKEND_API_KEY requirement, not just the Firebase
     # admin check. Promoting a user arguably outranks content CRUD.
-    auth_error = _require_admin_write()
+    auth_error, _claims = _require_admin_write()
     if auth_error:
         return auth_error
     _firestore_admin.collection('users').document(uid).set(
@@ -1454,10 +1468,12 @@ def admin_promote_user(uid):
 
 @app.route('/api/admin/users/<uid>/demote', methods=['POST'])
 def admin_demote_user(uid):
-    auth_error = _require_admin_write()
+    auth_error, claims = _require_admin_write()
     if auth_error:
         return auth_error
-    caller_uid = _verified_uid_or_none()
+    # Reuse the uid _require_admin_write() already verified above instead of
+    # calling verify_id_token() again for the same request.
+    caller_uid = claims.get("uid") if claims else None
     if uid == caller_uid:
         return jsonify({"error": "Cannot demote your own account"}), 400
     if uid in ADMIN_UIDS:
@@ -1482,6 +1498,11 @@ def admin_user_detail(uid):
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
     user_ref = _firestore_admin.collection('users').document(uid)
     profile_doc = user_ref.get()
     academy_doc = user_ref.collection('academy').document('stats').get()
@@ -1518,6 +1539,11 @@ def admin_content_counts():
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
     counts = {}
     for name in ACADEMY_COLLECTIONS:
         result = _firestore_admin.collection(name).count().get()
@@ -1529,20 +1555,27 @@ def _require_admin_write():
     """Same hard BACKEND_API_KEY requirement as /api/admin/seed (see that
     route's comment) — these endpoints write shared content live to
     Firestore, so they must never be reachable by accident just because
-    the global opt-in X-API-Key toggle happens to be off."""
+    the global opt-in X-API-Key toggle happens to be off.
+
+    Returns (None, claims) if OK to proceed — `claims` is the verified
+    Firebase token claims dict from _require_admin_user_with_claims(),
+    handed back so callers (admin_demote_user, _log_admin_action via
+    admin_create/update/delete_content) can reuse it instead of calling
+    verify_id_token() a second time for the same request. Returns
+    (error_tuple, None) otherwise."""
     if not BACKEND_API_KEY:
-        return jsonify({
+        return (jsonify({
             "error": "Set BACKEND_API_KEY on the backend (and the same value "
                      "in mobile_app/lib/.env) before using this endpoint."
-        }), 503
+        }), 503), None
     if request.headers.get("X-API-Key", "") != BACKEND_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
+        return (jsonify({"error": "Unauthorized"}), 401), None
     if _firestore_admin is None:
-        return jsonify({
+        return (jsonify({
             "error": "Firebase Admin isn't set up — missing "
                      "backend/serviceAccountKey.json."
-        }), 503
-    return _require_admin_user()
+        }), 503), None
+    return _require_admin_user_with_claims()
 
 
 # =====================================================================
@@ -1562,18 +1595,28 @@ def admin_list_content(collection):
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
     if collection not in ACADEMY_COLLECTIONS:
         return jsonify({"error": "Unknown collection"}), 404
     docs = _firestore_admin.collection(collection).stream()
     return jsonify({"docs": [{"docId": d.id, **d.to_dict()} for d in docs]})
 
 
-def _log_admin_action(action, collection, doc_id, before, after):
+def _log_admin_action(action, collection, doc_id, before, after, claims=None):
     """Records one content edit to admin_audit_log — see the ADMIN AUDIT
     LOG section below for why. Best-effort: a logging failure shouldn't
     fail the actual write the admin was trying to make, so this only
-    prints on error rather than raising."""
-    claims = _verified_claims_or_none() or {}
+    prints on error rather than raising.
+
+    `claims` is the caller's already-verified Firebase token claims (from
+    _require_admin_write() at the top of the calling route) — passed in
+    here instead of re-verifying via _verified_claims_or_none(), which
+    would call verify_id_token() a second time for the same request."""
+    claims = claims or {}
     try:
         _firestore_admin.collection('admin_audit_log').add({
             "action": action,
@@ -1591,47 +1634,59 @@ def _log_admin_action(action, collection, doc_id, before, after):
 
 @app.route('/api/admin/content/<collection>', methods=['POST'])
 def admin_create_content(collection):
-    auth_error = _require_admin_write()
+    auth_error, claims = _require_admin_write()
     if auth_error:
         return auth_error
     if collection not in ACADEMY_COLLECTIONS:
         return jsonify({"error": "Unknown collection"}), 404
     data = request.get_json(silent=True) or {}
-    doc_ref = _firestore_admin.collection(collection).document()
-    doc_ref.set(data)
-    _log_admin_action("create", collection, doc_ref.id, None, data)
-    return jsonify({"docId": doc_ref.id})
+    try:
+        doc_ref = _firestore_admin.collection(collection).document()
+        doc_ref.set(data)
+        _log_admin_action("create", collection, doc_ref.id, None, data, claims)
+        return jsonify({"docId": doc_ref.id})
+    except Exception as e:
+        print(f"Admin Create Content Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/admin/content/<collection>/<doc_id>', methods=['PUT'])
 def admin_update_content(collection, doc_id):
-    auth_error = _require_admin_write()
+    auth_error, claims = _require_admin_write()
     if auth_error:
         return auth_error
     if collection not in ACADEMY_COLLECTIONS:
         return jsonify({"error": "Unknown collection"}), 404
     data = request.get_json(silent=True) or {}
-    doc_ref = _firestore_admin.collection(collection).document(doc_id)
-    existing = doc_ref.get()
-    before = existing.to_dict() if existing.exists else None
-    doc_ref.set(data)
-    _log_admin_action("update", collection, doc_id, before, data)
-    return jsonify({"ok": True})
+    try:
+        doc_ref = _firestore_admin.collection(collection).document(doc_id)
+        existing = doc_ref.get()
+        before = existing.to_dict() if existing.exists else None
+        doc_ref.set(data)
+        _log_admin_action("update", collection, doc_id, before, data, claims)
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"Admin Update Content Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/admin/content/<collection>/<doc_id>', methods=['DELETE'])
 def admin_delete_content(collection, doc_id):
-    auth_error = _require_admin_write()
+    auth_error, claims = _require_admin_write()
     if auth_error:
         return auth_error
     if collection not in ACADEMY_COLLECTIONS:
         return jsonify({"error": "Unknown collection"}), 404
-    doc_ref = _firestore_admin.collection(collection).document(doc_id)
-    existing = doc_ref.get()
-    before = existing.to_dict() if existing.exists else None
-    doc_ref.delete()
-    _log_admin_action("delete", collection, doc_id, before, None)
-    return jsonify({"ok": True})
+    try:
+        doc_ref = _firestore_admin.collection(collection).document(doc_id)
+        existing = doc_ref.get()
+        before = existing.to_dict() if existing.exists else None
+        doc_ref.delete()
+        _log_admin_action("delete", collection, doc_id, before, None, claims)
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"Admin Delete Content Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # =====================================================================
@@ -1647,6 +1702,11 @@ def admin_audit_log():
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
     query = _firestore_admin.collection('admin_audit_log') \
         .order_by('timestamp', direction=admin_firestore.Query.DESCENDING).limit(200)
     entries = []
@@ -1695,6 +1755,11 @@ def admin_stats():
     auth_error = _require_admin_user()
     if auth_error:
         return auth_error
+    if _firestore_admin is None:
+        return jsonify({
+            "error": "Firebase Admin isn't set up — missing "
+                     "backend/serviceAccountKey.json."
+        }), 503
     total_users = sum(1 for _ in admin_auth.list_users().iterate_all())
     holdings = _firestore_admin.collection_group("holdings").count().get()
     battles = _firestore_admin.collection("tycoon_battles").count().get()
