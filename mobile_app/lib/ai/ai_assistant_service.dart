@@ -158,6 +158,20 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
     'confirmation_needed': false,
   };
 
+  // Same class of fix as _authErrorResult above (see its comment): a 5xx
+  // here means the backend itself was reached fine but the upstream AI
+  // provider (Gemini/OpenAI) rejected or failed the request — e.g. Gemini
+  // returning a 503 "model overloaded" under real load, confirmed live
+  // (2026-09-05). That's not a connectivity problem on the user's end, so
+  // telling them to "check your internet connection" is actively wrong and
+  // sends them looking at the wrong thing.
+  static const Map<String, dynamic> _serviceUnavailableResult = {
+    'action': 'chat',
+    'message':
+        "The AI assistant is temporarily overloaded on the server side — this isn't a connection problem on your end. Please try again in a moment.",
+    'confirmation_needed': false,
+  };
+
   Future<Map<String, dynamic>> processQuery(
     String userQuery, {
     List<Map<String, String>> history = const [],
@@ -178,6 +192,9 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
       }
       if (response.statusCode == 401) {
         return _authErrorResult;
+      }
+      if (response.statusCode >= 500) {
+        return _serviceUnavailableResult;
       }
     } catch (e) {
       print("Assistant Error: $e");
@@ -219,6 +236,9 @@ Return your response in JSON format with keys: "action" (the tool name or "chat"
       }
       if (response.statusCode == 401) {
         return _authErrorResult;
+      }
+      if (response.statusCode >= 500) {
+        return _serviceUnavailableResult;
       }
     } catch (e) {
       print("Assistant Vision Error: $e");
