@@ -97,7 +97,7 @@ class _AddLiquidityEventScreenState extends State<AddLiquidityEventScreen> {
               ),
               const SizedBox(height: 10),
               ListTile(
-                title: Text('Maturity Date: ${_selectedDate.toLocal()}'.split(' ')[0]),
+                title: Text('Maturity Date: ${_selectedDate.toLocal().toString().split(' ')[0]}'),
                 trailing: const Icon(Icons.calendar_today),
                 onTap: () async {
                   final date = await showDatePicker(

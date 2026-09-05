@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -20,8 +22,24 @@ class FloatingAssistantLauncher {
       if (granted != true) return false;
     }
 
-    final micStatus = await Permission.microphone.request();
-    final cameraStatus = await Permission.camera.request();
+    // On some devices/emulators the permission_handler platform channel
+    // never delivers a result for these two requests (no system dialog ever
+    // appears, nothing throws) — without a timeout that leaves the caller's
+    // "requesting" state stuck forever with no way to recover short of an
+    // app restart. Timing out and reporting failure is strictly safer than
+    // hanging: the caller already treats `false` as "couldn't enable it".
+    PermissionStatus micStatus;
+    PermissionStatus cameraStatus;
+    try {
+      micStatus = await Permission.microphone
+          .request()
+          .timeout(const Duration(seconds: 15));
+      cameraStatus = await Permission.camera
+          .request()
+          .timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      return false;
+    }
     if (!micStatus.isGranted || !cameraStatus.isGranted) return false;
 
     await FlutterOverlayWindow.showOverlay(

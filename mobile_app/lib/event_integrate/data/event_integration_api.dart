@@ -248,7 +248,7 @@ class EventIntegrationService {
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Text(
-              'WealthTriangle — Performance Report',
+              'WealthTriangle - Performance Report',
               style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
             ),
             pw.SizedBox(height: 4),
@@ -379,12 +379,12 @@ class EventIntegrationService {
             ? pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  pw.Text('WealthTriangle — Your Financial Triangle Report',
+                  pw.Text('WealthTriangle - Your Financial Triangle Report',
                       style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
                   pw.SizedBox(height: 4),
                   pw.Text(
                     'WealthTriangle is built around one idea: you cannot maximize Return, '
-                    'Safety, and Liquidity all at once — every financial decision trades one '
+                    'Safety, and Liquidity all at once - every financial decision trades one '
                     'for another. This report shows where you currently stand on that '
                     'triangle, and how far your knowledge has grown.',
                     style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
@@ -397,7 +397,7 @@ class EventIntegrationService {
               )
             : pw.SizedBox(),
         build: (context) => [
-          sectionHeader('🔺 Your Iron Triangle'),
+          sectionHeader('Your Iron Triangle'),
           statRow('Overall Triangle Health Score', '${triangleHealthScore.toStringAsFixed(0)}/100'),
           statRow('Return', '${returnScore.toStringAsFixed(0)}/100'),
           statRow('Safety', '${safetyScore.toStringAsFixed(0)}/100'),
@@ -407,14 +407,14 @@ class EventIntegrationService {
           pw.SizedBox(height: 6),
           pw.Text(triangleNote, style: pw.TextStyle(fontSize: 10, fontStyle: pw.FontStyle.italic)),
 
-          sectionHeader('💰 Financial Situation'),
+          sectionHeader('Financial Situation'),
           statRow('Monthly Salary', 'RM ${monthlySalary.toStringAsFixed(2)}'),
           statRow('Monthly Expenses', 'RM ${monthlyExpenses.toStringAsFixed(2)}'),
           statRow('Monthly Savings Rate', '${savingsRate.toStringAsFixed(1)}%'),
           statRow('Current Savings', 'RM ${currentSavings.toStringAsFixed(2)}'),
           statRow('Total Monthly Passive Income', 'RM ${totalMonthlyPassiveIncome.toStringAsFixed(2)}'),
 
-          sectionHeader('📈 Your Holdings'),
+          sectionHeader('Your Holdings'),
           if (holdings.isEmpty)
             pw.Text('No holdings yet.', style: const pw.TextStyle(fontSize: 10))
           else
@@ -438,7 +438,7 @@ class EventIntegrationService {
               border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
             ),
 
-          sectionHeader('📚 Learning Progress'),
+          sectionHeader('Learning Progress'),
           statRow('Academy Level', '$academyLevel'),
           statRow('Total XP', '$academyXp'),
           statRow('Lessons Completed', '${completedLessonTitles.length} / $totalLessons'),
@@ -451,7 +451,7 @@ class EventIntegrationService {
                   child: pw.Text('• $title', style: const pw.TextStyle(fontSize: 10)),
                 )),
 
-          sectionHeader('⏳ Simulation History'),
+          sectionHeader('Simulation History'),
           if (simData.isEmpty)
             pw.Text('No simulation history found for this account.',
                 style: const pw.TextStyle(fontSize: 10))
