@@ -221,7 +221,18 @@ class WealthState extends ChangeNotifier {
       });
       _incomeSourceIds.add(docRef.id);
     } catch (e) {
+      // If this write fails, _incomeSources and _incomeSourceIds are now out
+      // of sync (the former has this optimistic entry, the latter doesn't)
+      // — every removeIncomeSource(index) call after this point would then
+      // use the wrong index into _incomeSourceIds, silently deleting a
+      // completely different, real income source's Firestore document
+      // instead of the one the user actually picked. Roll back the
+      // optimistic add instead of leaving that landmine in place, and
+      // surface the failure the same way _pushToCloud() already does.
       print("Failed to save income source: $e");
+      _incomeSources.remove(newSource);
+      _lastSyncError = "Couldn't save that income source — check your connection.";
+      notifyListeners();
     }
   }
 

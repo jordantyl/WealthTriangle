@@ -140,11 +140,33 @@ class AcademyState extends ChangeNotifier {
   // ==========================================
   // 2. FETCH DATA
   // ==========================================
+  // Was one sequential try/catch spanning all five collections — confirmed
+  // live that if any single one throws (or the whole chain otherwise never
+  // resolves), the shared catch swallows it with only a print(), and EVERY
+  // collection after the failure point stays permanently empty, with no
+  // distinction shown to the user between "still loading" and "gave up".
+  // That took down Quiz, Flash Trader AND Market Tycoon simultaneously from
+  // one failure. Each collection now fetches and fails independently, so a
+  // problem with one game mode's content can't silently take the others
+  // down with it, and each failure is logged with which collection it was.
   Future<void> fetchGameContent() async {
+    await Future.wait([
+      _fetchScenarios(),
+      _fetchQuizzes(),
+      _fetchFlashScenarios(),
+      _fetchTradeItems(),
+      _fetchTradeEvents(),
+    ]);
+    notifyListeners();
+  }
+
+  Future<void> _fetchScenarios() async {
     try {
-      var scnSnapshot =
-          await _db.collection('academy_scenarios').orderBy('id').get();
-      _scenarios = scnSnapshot.docs.map((doc) {
+      // Sorted client-side, not via Firestore orderBy: this is a small,
+      // rarely-changing collection, and removing the orderBy removes any
+      // dependency on that field's index existing/being healthy.
+      var snapshot = await _db.collection('academy_scenarios').get();
+      final scenarios = snapshot.docs.map((doc) {
         var data = doc.data();
         return MarketScenario(
           id: data['id'],
@@ -157,15 +179,35 @@ class AcademyState extends ChangeNotifier {
           aiFeedback: data['aiFeedback'] ?? '',
         );
       }).toList();
+      scenarios.sort((a, b) => a.id.compareTo(b.id));
+      _scenarios = scenarios;
+    } catch (e) {
+      print("❌ Failed to fetch academy_scenarios: $e");
+    }
+  }
 
-      var quizSnapshot = await _db.collection('academy_quizzes').get();
-      _quizzes = quizSnapshot.docs.map((doc) => doc.data()).toList();
+  Future<void> _fetchQuizzes() async {
+    try {
+      var snapshot = await _db.collection('academy_quizzes').get();
+      _quizzes = snapshot.docs.map((doc) => doc.data()).toList();
+    } catch (e) {
+      print("❌ Failed to fetch academy_quizzes: $e");
+    }
+  }
 
-      var flashSnapshot = await _db.collection('academy_flash').get();
-      _flashScenarios = flashSnapshot.docs.map((doc) => doc.data()).toList();
+  Future<void> _fetchFlashScenarios() async {
+    try {
+      var snapshot = await _db.collection('academy_flash').get();
+      _flashScenarios = snapshot.docs.map((doc) => doc.data()).toList();
+    } catch (e) {
+      print("❌ Failed to fetch academy_flash: $e");
+    }
+  }
 
-      var itemsSnapshot = await _db.collection('academy_trade_items').get();
-      _allTradeItems = itemsSnapshot.docs.map((doc) {
+  Future<void> _fetchTradeItems() async {
+    try {
+      var snapshot = await _db.collection('academy_trade_items').get();
+      _allTradeItems = snapshot.docs.map((doc) {
         var data = doc.data();
         return TradeItem(
           id: data['id'],
@@ -174,9 +216,15 @@ class AcademyState extends ChangeNotifier {
           basePrice: (data['basePrice'] as num).toDouble(),
         );
       }).toList();
+    } catch (e) {
+      print("❌ Failed to fetch academy_trade_items: $e");
+    }
+  }
 
-      var eventsSnapshot = await _db.collection('academy_trade_events').get();
-      _tradeEvents = eventsSnapshot.docs.map((doc) {
+  Future<void> _fetchTradeEvents() async {
+    try {
+      var snapshot = await _db.collection('academy_trade_events').get();
+      _tradeEvents = snapshot.docs.map((doc) {
         var data = doc.data();
         return TradeEvent(
           text: data['text'],
@@ -187,10 +235,8 @@ class AcademyState extends ChangeNotifier {
           turnsDelay: data['turnsDelay'] ?? 0,
         );
       }).toList();
-
-      notifyListeners();
     } catch (e) {
-      print("❌ CRITICAL ERROR FETCHING DATA: $e");
+      print("❌ Failed to fetch academy_trade_events: $e");
     }
   }
 
